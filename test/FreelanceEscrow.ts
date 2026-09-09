@@ -2,6 +2,242 @@ import { expect } from "chai";
 import hre from "hardhat";
 
 describe("FreelanceEscrow", function () {
+  it("should not allow arbitrator to specify an arbitrary recipient", async function () {
+
+  const { ethers } = await hre.network.create();
+
+  const escrow =
+    await ethers.deployContract("FreelanceEscrow");
+
+  await escrow.waitForDeployment();
+
+
+  const fragment =
+    escrow.interface.getFunction(
+      "resolveDispute"
+    );
+
+
+  expect(fragment).to.not.equal(null);
+
+  /*
+   * resolveDispute should have exactly:
+   *
+   * 1. jobId
+   * 2. decision
+   *
+   * No recipient address.
+   */
+  expect(
+    fragment!.inputs.length
+  ).to.equal(2);
+
+  expect(
+    fragment!.inputs[0].type
+  ).to.equal("uint256");
+
+  // Solidity enum appears in ABI as uint8.
+  expect(
+    fragment!.inputs[1].type
+  ).to.equal("uint8");
+});
+  it("should route arbitrator REFUND decision only to client", async function () {
+
+  const { ethers } = await hre.network.create();
+
+  const [
+    client,
+    freelancer,
+    arbitrator,
+    attacker
+  ] = await ethers.getSigners();
+
+  const escrow =
+    await ethers.deployContract("FreelanceEscrow");
+
+  await escrow.waitForDeployment();
+
+  const latestBlock =
+    await ethers.provider.getBlock("latest");
+
+  const deadline =
+    BigInt(latestBlock!.timestamp + 3600);
+
+  const amount =
+    ethers.parseEther("1");
+
+  await escrow.connect(client).createJob(
+    "Refund Security Test",
+    freelancer.address,
+    arbitrator.address,
+    deadline,
+    {
+      value: amount
+    }
+  );
+
+  await escrow
+    .connect(freelancer)
+    .acceptJob(1);
+
+  await escrow
+    .connect(freelancer)
+    .submitWork(
+      1,
+      "valid-proof"
+    );
+
+  await escrow
+    .connect(client)
+    .raiseDispute(1);
+
+
+  const clientBefore =
+    await ethers.provider.getBalance(
+      client.address
+    );
+
+  const attackerBefore =
+    await ethers.provider.getBalance(
+      attacker.address
+    );
+
+
+  // REFUND = 1
+  await escrow
+    .connect(arbitrator)
+    .resolveDispute(1, 1);
+
+
+  const clientAfter =
+    await ethers.provider.getBalance(
+      client.address
+    );
+
+  const attackerAfter =
+    await ethers.provider.getBalance(
+      attacker.address
+    );
+
+
+  /*
+   * Arbitrator sends the transaction,
+   * so the client pays no gas here.
+   */
+  expect(
+    clientAfter - clientBefore
+  ).to.equal(amount);
+
+
+  // Arbitrary third-party wallet receives nothing.
+  expect(
+    attackerAfter
+  ).to.equal(attackerBefore);
+
+
+  const job =
+    await escrow.jobs(1);
+
+  // REFUNDED = 6
+  expect(job.state).to.equal(6n);
+});
+  it("should route arbitrator RELEASE decision only to freelancer", async function () {
+
+  const { ethers } = await hre.network.create();
+
+  const [
+    client,
+    freelancer,
+    arbitrator,
+    attacker
+  ] = await ethers.getSigners();
+
+  const escrow =
+    await ethers.deployContract("FreelanceEscrow");
+
+  await escrow.waitForDeployment();
+
+  const latestBlock =
+    await ethers.provider.getBlock("latest");
+
+  const deadline =
+    BigInt(latestBlock!.timestamp + 3600);
+
+  const amount =
+    ethers.parseEther("1");
+
+  await escrow.connect(client).createJob(
+    "Arbitration Security Test",
+    freelancer.address,
+    arbitrator.address,
+    deadline,
+    {
+      value: amount
+    }
+  );
+
+  await escrow
+    .connect(freelancer)
+    .acceptJob(1);
+
+  await escrow
+    .connect(freelancer)
+    .submitWork(
+      1,
+      "valid-proof"
+    );
+
+  await escrow
+    .connect(client)
+    .raiseDispute(1);
+
+
+  const freelancerBefore =
+    await ethers.provider.getBalance(
+      freelancer.address
+    );
+
+  const attackerBefore =
+    await ethers.provider.getBalance(
+      attacker.address
+    );
+
+
+  // RELEASE = 2
+  await escrow
+    .connect(arbitrator)
+    .resolveDispute(1, 2);
+
+
+  const freelancerAfter =
+    await ethers.provider.getBalance(
+      freelancer.address
+    );
+
+  const attackerAfter =
+    await ethers.provider.getBalance(
+      attacker.address
+    );
+
+
+  // Freelancer receives exactly the escrow amount.
+  expect(
+    freelancerAfter - freelancerBefore
+  ).to.equal(amount);
+
+
+  // Unrelated wallet gets absolutely nothing.
+  expect(
+    attackerAfter
+  ).to.equal(attackerBefore);
+
+
+  const job =
+    await escrow.jobs(1);
+
+  // RELEASED = 5
+  expect(job.state).to.equal(5n);
+});
   it("should revert timeout payment if freelancer rejects ETH", async function () {
 
   const { ethers } = await hre.network.create();
