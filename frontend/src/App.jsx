@@ -1,122 +1,171 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useEffect, useState } from "react";
+import { ethers } from "ethers";
+import "./App.css";
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [account, setAccount] = useState("");
+  const [network, setNetwork] = useState("");
+  const [error, setError] = useState("");
+  const [connecting, setConnecting] = useState(false);
+
+  async function connectWallet() {
+    try {
+      setError("");
+      setConnecting(true);
+
+      // Check whether MetaMask or another injected wallet exists
+      if (!window.ethereum) {
+        setError("MetaMask is not installed.");
+        return;
+      }
+
+      // Ask MetaMask for permission to access wallet accounts
+      const accounts = await window.ethereum.request({
+        method: "eth_requestAccounts",
+      });
+
+      if (!accounts || accounts.length === 0) {
+        setError("No wallet account was selected.");
+        return;
+      }
+
+      // Ethers v6 provider for browser wallets
+      const provider = new ethers.BrowserProvider(
+        window.ethereum
+      );
+
+      const networkData = await provider.getNetwork();
+
+      setAccount(accounts[0]);
+
+      setNetwork(
+        `${networkData.name} (Chain ID: ${networkData.chainId.toString()})`
+      );
+    } catch (err) {
+      console.error("Wallet connection error:", err);
+
+      // MetaMask code 4001 means user rejected the request
+      if (err.code === 4001) {
+        setError("Wallet connection was cancelled.");
+      } else {
+        setError("Unable to connect wallet.");
+      }
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!window.ethereum) {
+      return;
+    }
+
+    // Update UI if user changes MetaMask account
+    function handleAccountsChanged(accounts) {
+      if (accounts.length === 0) {
+        setAccount("");
+        setNetwork("");
+      } else {
+        setAccount(accounts[0]);
+      }
+    }
+
+    // Refresh network information if chain changes
+    async function handleChainChanged() {
+      try {
+        const provider =
+          new ethers.BrowserProvider(window.ethereum);
+
+        const networkData =
+          await provider.getNetwork();
+
+        setNetwork(
+          `${networkData.name} (Chain ID: ${networkData.chainId.toString()})`
+        );
+      } catch {
+        setNetwork("");
+      }
+    }
+
+    window.ethereum.on(
+      "accountsChanged",
+      handleAccountsChanged
+    );
+
+    window.ethereum.on(
+      "chainChanged",
+      handleChainChanged
+    );
+
+    // Cleanup listeners when component is removed
+    return () => {
+      window.ethereum.removeListener(
+        "accountsChanged",
+        handleAccountsChanged
+      );
+
+      window.ethereum.removeListener(
+        "chainChanged",
+        handleChainChanged
+      );
+    };
+  }, []);
+
+  function shortAddress(address) {
+    if (!address) {
+      return "";
+    }
+
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
+    <div className="app">
+      <div className="card">
+        <h1>Freelance Escrow</h1>
+
+        <p className="subtitle">
+          Decentralized escrow for secure freelance transactions
+        </p>
+
+        {!account ? (
+          <button
+            onClick={connectWallet}
+            disabled={connecting}
+          >
+            {connecting
+              ? "Connecting..."
+              : "Connect MetaMask"}
+          </button>
+        ) : (
+          <div className="wallet-info">
+            <h2>Wallet Connected ✓</h2>
+
+            <p>
+              <strong>Account:</strong>{" "}
+              {shortAddress(account)}
+            </p>
+
+            <p>
+              <strong>Network:</strong>{" "}
+              {network || "Loading..."}
+            </p>
+          </div>
+        )}
+
+        {error && (
+          <p className="error">
+            {error}
           </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+        )}
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+        <p className="security-note">
+          Wallet transactions are signed inside MetaMask.
+          This application does not access your private key.
+        </p>
+      </div>
+    </div>
+  );
 }
 
-export default App
+export default App;
