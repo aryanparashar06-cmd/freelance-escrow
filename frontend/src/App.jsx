@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ethers } from "ethers";
+import { LOCAL_CHAIN_ID, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
 import "./App.css";
 
 function App() {
@@ -7,115 +8,98 @@ function App() {
   const [network, setNetwork] = useState("");
   const [error, setError] = useState("");
   const [connecting, setConnecting] = useState(false);
+  const [jobCount, setJobCount] = useState(null);
+  const [readError, setReadError] = useState("");
 
   async function connectWallet() {
     try {
       setError("");
       setConnecting(true);
-
-      // Check whether MetaMask or another injected wallet exists
       if (!window.ethereum) {
         setError("MetaMask is not installed.");
         return;
       }
 
-      // Ask MetaMask for permission to access wallet accounts
+      // This requests account access, not a transaction signature.
       const accounts = await window.ethereum.request({
         method: "eth_requestAccounts",
       });
-
       if (!accounts || accounts.length === 0) {
         setError("No wallet account was selected.");
         return;
       }
-
-      // Ethers v6 provider for browser wallets
-      const provider = new ethers.BrowserProvider(
-        window.ethereum
-      );
-
-      const networkData = await provider.getNetwork();
-
       setAccount(accounts[0]);
-
-      setNetwork(
-        `${networkData.name} (Chain ID: ${networkData.chainId.toString()})`
-      );
     } catch (err) {
-      console.error("Wallet connection error:", err);
-
-      // MetaMask code 4001 means user rejected the request
-      if (err.code === 4001) {
-        setError("Wallet connection was cancelled.");
-      } else {
-        setError("Unable to connect wallet.");
-      }
+      setError(err.code === 4001
+        ? "Wallet connection was cancelled."
+        : "Unable to connect wallet.");
     } finally {
       setConnecting(false);
     }
   }
 
   useEffect(() => {
-    if (!window.ethereum) {
-      return;
-    }
+    const wallet = window.ethereum;
+    if (!wallet) return;
 
-    // Update UI if user changes MetaMask account
-    function handleAccountsChanged(accounts) {
-      if (accounts.length === 0) {
-        setAccount("");
-        setNetwork("");
-      } else {
-        setAccount(accounts[0]);
-      }
-    }
+    // Ignore old reads if the account or chain changes while awaiting a reply.
+    let requestId = 0;
 
-    // Refresh network information if chain changes
-    async function handleChainChanged() {
+    async function refreshContract() {
+      const currentRequest = ++requestId;
       try {
-        const provider =
-          new ethers.BrowserProvider(window.ethereum);
+        const provider = new ethers.BrowserProvider(wallet);
+        const networkData = await provider.getNetwork();
+        if (currentRequest !== requestId) return;
 
-        const networkData =
-          await provider.getNetwork();
+        setNetwork(`${networkData.name} (Chain ID: ${networkData.chainId})`);
+        if (networkData.chainId !== LOCAL_CHAIN_ID) {
+          setReadError("Wrong network. Select Hardhat Localhost (Chain ID: 31337) in MetaMask.");
+          return;
+        }
 
-        setNetwork(
-          `${networkData.name} (Chain ID: ${networkData.chainId.toString()})`
-        );
+        // A provider can read the contract without a signer.
+        const escrow = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, provider);
+        const count = await escrow.jobCount();
+        if (currentRequest !== requestId) return;
+        setJobCount(count.toString());
       } catch {
-        setNetwork("");
+        if (currentRequest !== requestId) return;
+        setReadError("Unable to read Total Jobs. Check that the local node is running and the contract is deployed at the configured address.");
       }
     }
 
-    window.ethereum.on(
-      "accountsChanged",
-      handleAccountsChanged
-    );
+    function clearRead() {
+      ++requestId;
+      setNetwork("");
+      setJobCount(null);
+      setReadError("");
+      setError("");
+    }
 
-    window.ethereum.on(
-      "chainChanged",
-      handleChainChanged
-    );
+    function handleAccountsChanged(accounts) {
+      clearRead();
+      setAccount(accounts[0] || "");
+      if (accounts[0] === account && account) void refreshContract();
+    }
 
-    // Cleanup listeners when component is removed
+    function handleChainChanged() {
+      clearRead();
+      if (account) void refreshContract();
+    }
+
+    wallet.on("accountsChanged", handleAccountsChanged);
+    wallet.on("chainChanged", handleChainChanged);
+    if (account) void refreshContract();
+
     return () => {
-      window.ethereum.removeListener(
-        "accountsChanged",
-        handleAccountsChanged
-      );
-
-      window.ethereum.removeListener(
-        "chainChanged",
-        handleChainChanged
-      );
+      ++requestId;
+      wallet.removeListener("accountsChanged", handleAccountsChanged);
+      wallet.removeListener("chainChanged", handleChainChanged);
     };
-  }, []);
+  }, [account]);
 
   function shortAddress(address) {
-    if (!address) {
-      return "";
-    }
-
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   }
 
@@ -123,44 +107,35 @@ function App() {
     <div className="app">
       <div className="card">
         <h1>Freelance Escrow</h1>
-
         <p className="subtitle">
           Decentralized escrow for secure freelance transactions
         </p>
 
         {!account ? (
-          <button
-            onClick={connectWallet}
-            disabled={connecting}
-          >
-            {connecting
-              ? "Connecting..."
-              : "Connect MetaMask"}
-          </button>
+          <>
+            <p>{window.ethereum
+              ? "Connect your wallet to view Total Jobs."
+              : "MetaMask is not installed. Install MetaMask to continue."}</p>
+            <button onClick={connectWallet} disabled={connecting || !window.ethereum}>
+              {connecting ? "Connecting..." : "Connect MetaMask"}
+            </button>
+          </>
         ) : (
           <div className="wallet-info">
             <h2>Wallet Connected ✓</h2>
-
-            <p>
-              <strong>Account:</strong>{" "}
-              {shortAddress(account)}
-            </p>
-
-            <p>
-              <strong>Network:</strong>{" "}
-              {network || "Loading..."}
-            </p>
+            <p><strong>Account:</strong> {shortAddress(account)}</p>
+            <p><strong>Network:</strong> {network || "Loading..."}</p>
+            {!readError && (
+              <p aria-live="polite"><strong>Total Jobs:</strong> {jobCount ?? "Loading..."}</p>
+            )}
           </div>
         )}
 
-        {error && (
-          <p className="error">
-            {error}
-          </p>
+        {(error || readError) && (
+          <p className="error" role="alert">{error || readError}</p>
         )}
-
         <p className="security-note">
-          Wallet transactions are signed inside MetaMask.
+          Reading Total Jobs does not require gas or transaction approval.
           This application does not access your private key.
         </p>
       </div>
