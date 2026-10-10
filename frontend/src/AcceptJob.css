@@ -1,0 +1,6 @@
+.accept-job-panel { margin-top: 28px; }
+.accept-job-details { margin: 24px 0; display: grid; gap: 14px; }
+.accept-job-details div { min-width: 0; }
+.accept-job-details dt { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+.accept-job-details dd { margin: 0; color: #f4e9d7; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.accept-job-button { margin-top: 22px; }

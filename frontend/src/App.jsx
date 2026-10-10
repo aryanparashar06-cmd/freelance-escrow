@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
 import "./App.css";
+import AcceptJob from "./AcceptJob";
 
 function App() {
   const [account, setAccount] = useState("");
@@ -206,63 +207,113 @@ function App() {
 
   return (
     <div className="app">
-      <div className="card">
-        <h1>Freelance Escrow</h1>
-        <p className="subtitle">
-          Decentralized escrow for secure freelance transactions
-        </p>
-
-        {!account ? (
-          <>
-            <p>{window.ethereum
-              ? "Connect your wallet to view Total Jobs."
-              : "MetaMask is not installed. Install MetaMask to continue."}</p>
-            <button onClick={connectWallet} disabled={connecting || !window.ethereum}>
-              {connecting ? "Connecting..." : "Connect MetaMask"}
-            </button>
-          </>
-        ) : (
-          <div className="wallet-info">
-            <h2>Wallet Connected ✓</h2>
-            <p><strong>Account:</strong> {shortAddress(account)}</p>
-            <p><strong>Network:</strong> {network || "Loading..."}</p>
-            {!readError && (
-              <p aria-live="polite"><strong>Total Jobs:</strong> {jobCount ?? "Loading..."}</p>
-            )}
-          </div>
-        )}
-
-        {(error || readError) && (
-          <p className="error" role="alert">{error || readError}</p>
-        )}
-        <form className="create-job" onSubmit={createJob}>
-          <h2>Create Job</h2>
-          <p>You are the client. Use three different wallet addresses. Payment is held in escrow on Hardhat Localhost.</p>
-          <fieldset disabled={submitting}>
-            <label htmlFor="title">Job title</label>
-            <input id="title" name="title" type="text" required placeholder="Build a landing page" />
-            <label htmlFor="freelancer">Freelancer wallet address</label>
-            <input id="freelancer" name="freelancer" type="text" required placeholder="0x..." />
-            <label htmlFor="arbitrator">Arbitrator wallet address</label>
-            <input id="arbitrator" name="arbitrator" type="text" required placeholder="0x..." />
-            <label htmlFor="deadline">Deadline (your local date and time)</label>
-            <input id="deadline" name="deadline" type="datetime-local" required />
-            <label htmlFor="paymentAmount">Escrow payment amount in ETH</label>
-            <input id="paymentAmount" name="paymentAmount" type="text" inputMode="decimal" required placeholder="0.01" />
-            <button type="submit" disabled={!account || submitting}>
-              {submitting ? "Creating job..." : "Create Job"}
-            </button>
-          </fieldset>
-          <p>Creating a job requires transaction approval in MetaMask and local ETH for payment plus gas.</p>
-        </form>
-        {transactionStatus && <p className="transaction" role="status">{transactionStatus}</p>}
-        {transactionError && <p className="error" role="alert">{transactionError}</p>}
-        {transactionHash && <p className="transaction">Transaction hash: {transactionHash}</p>}
-        <p className="security-note">
-          Reading Total Jobs does not require gas or transaction approval.
-          This application does not access your private key.
-        </p>
+      <div className="space-scene" aria-hidden="true">
+        <div className="stars" />
+        <div className="moon" />
+        <div className="horizon-glow" />
+        <div className="planetary-horizon" />
       </div>
+
+      <header className="site-header">
+        <a className="brand" href="#top" aria-label="Freelance Escrow home">
+          <span className="brand-orbit" aria-hidden="true" />
+          Freelance<span>Escrow</span>
+        </a>
+        <div className={account ? "wallet-badge connected" : "wallet-badge"}>
+          <span className="status-dot" />
+          {account ? "Wallet connected" : "Wallet not connected"}
+        </div>
+      </header>
+
+      <main id="top">
+        <section className="hero" aria-labelledby="hero-title">
+          <p className="eyebrow">A new horizon for freelance trust</p>
+          <h1 id="hero-title">FREELANCE <span>ESCROW</span></h1>
+          <p className="subtitle">Decentralized escrow for secure freelance transactions</p>
+          <a className="hero-link" href="#create-job">Create your next opportunity <span aria-hidden="true">↓</span></a>
+          <div className="hero-caption" aria-hidden="true"><span /> BUILT ON ETHEREUM <span /></div>
+        </section>
+
+        <section className="workspace" aria-label="Escrow workspace">
+          <div className="status-grid">
+            <div className="status-card">
+              <span className="status-label">01 / YOUR WALLET</span>
+              {account ? (
+                <p className="status-value" title={account}>{shortAddress(account)} <span className="small-dot" /></p>
+              ) : (
+                <button className="connect-button" onClick={connectWallet} disabled={connecting || !window.ethereum}>
+                  {connecting ? "Connecting..." : "Connect MetaMask"} <span aria-hidden="true">↗</span>
+                </button>
+              )}
+              <p className="status-detail">{account ? "Connected as client" : window.ethereum
+                ? "Connect to begin your next project"
+                : "Install MetaMask to continue"}</p>
+            </div>
+            <div className="status-card">
+              <span className="status-label">02 / NETWORK</span>
+              <p className="status-value">{account ? network || "Loading..." : "Hardhat Localhost"}</p>
+              <p className="status-detail">Local development · Chain ID 31337</p>
+            </div>
+            <div className="status-card jobs-card">
+              <span className="status-label">03 / TOTAL JOBS</span>
+              <p className="status-value job-count" aria-live="polite">{account && !readError ? jobCount ?? "Loading..." : "—"}</p>
+              <p className="status-detail">{readError ? "Count unavailable" : account ? "Recorded on the blockchain" : "Connect wallet to view"}</p>
+            </div>
+          </div>
+
+          {(error || readError) && (
+            <p className="error" role="alert">{error || readError}</p>
+          )}
+
+          <div className="form-panel" id="create-job">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">YOUR NEXT CHAPTER</p>
+                <h2>Create escrow job</h2>
+              </div>
+              <span className="panel-symbol" aria-hidden="true">◇</span>
+            </div>
+            <p className="panel-intro">Great work starts with trust. Define your project and secure its payment in escrow.</p>
+            <form className="create-job" onSubmit={createJob}>
+              <fieldset disabled={submitting}>
+                <div className="field">
+                  <label htmlFor="title">Job title</label>
+                  <input id="title" name="title" type="text" required placeholder="e.g. Design and build a landing page" />
+                </div>
+                <div className="field">
+                  <label htmlFor="freelancer">Freelancer wallet address</label>
+                  <input id="freelancer" name="freelancer" type="text" required placeholder="0x..." />
+                </div>
+                <div className="field">
+                  <label htmlFor="arbitrator">Arbitrator wallet address</label>
+                  <input id="arbitrator" name="arbitrator" type="text" required placeholder="0x..." />
+                </div>
+                <p className="field-note">You are the client. Use a different wallet address for each of the three roles.</p>
+                <div className="field-row">
+                  <div className="field">
+                    <label htmlFor="deadline">Deadline <span>· local time</span></label>
+                    <input id="deadline" name="deadline" type="datetime-local" required />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="paymentAmount">Escrow amount <span>· ETH</span></label>
+                    <input id="paymentAmount" name="paymentAmount" type="text" inputMode="decimal" required placeholder="0.01" />
+                  </div>
+                </div>
+                <button className="create-button" type="submit" disabled={!account || submitting}>
+                  {submitting ? "Creating job..." : "Create Job"} <span aria-hidden="true">↗</span>
+                </button>
+              </fieldset>
+              <p className="form-note">Payment is held on Hardhat Localhost. MetaMask approval and local ETH for payment plus gas are required.</p>
+            </form>
+            {transactionStatus && <p className="transaction" role="status">{transactionStatus}</p>}
+            {transactionError && <p className="error" role="alert">{transactionError}</p>}
+            {transactionHash && <p className="transaction transaction-hash">Transaction hash: {transactionHash}</p>}
+          </div>
+          <AcceptJob account={account} />
+          <p className="security-note">Reading Total Jobs does not require gas or transaction approval.<br />This application does not access your private key.</p>
+        </section>
+      </main>
+      <footer className="site-footer"><span>FREELANCE ESCROW</span><span>Powered by smart contracts. Built on trust.</span></footer>
     </div>
   );
 }
