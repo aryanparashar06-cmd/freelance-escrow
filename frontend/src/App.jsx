@@ -3,6 +3,7 @@ import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
 import "./App.css";
 import AcceptJob from "./AcceptJob";
+import SubmitWork from "./SubmitWork";
 
 function App() {
   const [account, setAccount] = useState("");
@@ -310,6 +311,7 @@ function App() {
             {transactionHash && <p className="transaction transaction-hash">Transaction hash: {transactionHash}</p>}
           </div>
           <AcceptJob account={account} />
+          <SubmitWork account={account} />
           <p className="security-note">Reading Total Jobs does not require gas or transaction approval.<br />This application does not access your private key.</p>
         </section>
       </main>
