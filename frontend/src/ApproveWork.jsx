@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
-import { LOCAL_CHAIN_ID, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -64,7 +64,7 @@ export default function ApproveWork({ account }) {
     if (!window.ethereum || !account) throw new Error("Connect MetaMask before loading or approving work.");
     const provider = new ethers.BrowserProvider(window.ethereum);
     if ((await provider.getNetwork()).chainId !== LOCAL_CHAIN_ID) {
-      throw new Error("Wrong network. Select Hardhat Localhost (Chain ID: 31337).");
+      throw new Error(WRONG_NETWORK_MESSAGE);
     }
     const accounts = await provider.send("eth_accounts", []);
     if (!accounts.length || accounts[0].toLowerCase() !== account.toLowerCase()) {
@@ -109,7 +109,7 @@ export default function ApproveWork({ account }) {
         }
         const signer = await provider.getSigner(account);
         if (BigInt(await provider.send("eth_chainId", [])) !== LOCAL_CHAIN_ID) {
-          throw new Error("Wrong network. Select Hardhat Localhost (Chain ID: 31337).");
+          throw new Error(WRONG_NETWORK_MESSAGE);
         }
         if (current !== revision.current) return;
         if ((await signer.getAddress()).toLowerCase() !== details.client.toLowerCase()) {
@@ -128,7 +128,7 @@ export default function ApproveWork({ account }) {
         if (!receipt || receipt.status !== 1) throw new Error("Transaction was not confirmed successfully.");
         if (current !== revision.current) return;
         confirmedBlock = receipt.blockNumber;
-        setStatus(`Job ${id} approved successfully. Escrow payment released to the freelancer. State: RELEASED.`);
+        setStatus(`Transaction confirmed. Job ${id} approved successfully. Escrow payment released to the freelancer. State: RELEASED.`);
       }
       // Keep transaction success separate from a failed details refresh.
       try {

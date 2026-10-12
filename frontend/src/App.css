@@ -75,7 +75,7 @@
 .hero-link:hover { color: #fff0d0; }
 .hero-caption { position: absolute; bottom: 15px; left: 0; width: 100%; display: flex; align-items: center; justify-content: center; gap: 14px; font-size: 8px; letter-spacing: 3px; color: #bdb19a; }
 .hero-caption span { width: 34px; height: 1px; background: #c9ac694d; }
-.workspace { position: relative; width: min(800px, calc(100% - 48px)); margin: 30px auto 0; }
+.workspace { position: relative; width: min(1120px, calc(100% - 48px)); margin: 30px auto 0; }
 .status-grid { display: grid; grid-template-columns: 1fr 1.2fr .8fr; gap: 12px; margin-bottom: 24px; }
 .status-card { padding: 20px; border: 1px solid #c5ae7a24; border-radius: 8px; background: linear-gradient(120deg, #1b1b18ae, #101111e8); min-width: 0; }
 .status-label { display: block; font-size: 8px; letter-spacing: 1.65px; color: #a8a18e; }
@@ -112,6 +112,41 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .error { color: #f2b5a5; border-color: #d58b713d; background: #a5453210; }
 .transaction-hash { font-family: ui-monospace, monospace; font-size: 10px; }
 .security-note { text-align: center; margin-top: 22px; color: #8f8d84; font-size: 10px; line-height: 1.9; }
+.role-section { margin-top: 58px; scroll-margin-top: 24px; }
+.role-section-heading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 20px;
+  padding: 0 6px;
+}
+.role-section-heading > span {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #d8af6445;
+  border-radius: 50%;
+  color: #d7b36f;
+  background: #b6872f0a;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.role-section-heading h2 {
+  margin: 7px 0 9px;
+  color: #f5f1e9;
+  font-size: clamp(1.35rem, 2.6vw, 2rem);
+  font-weight: 350;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+.role-section-heading p:last-child { margin: 0; max-width: 700px; color: #99958d; font-size: 12px; line-height: 1.7; }
+.role-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.role-actions > * { margin-top: 0; height: 100%; }
+.role-actions > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+.single-action > * { grid-column: 1 / -1; }
+.shared-actions .role-section-heading > span { border-color: #d788684d; color: #e3a17f; }
 .site-footer { margin-top: 70px; padding: 22px 48px; border-top: 1px solid #ffffff0c; font-size: 9px; color: #8f8d84; }
 .site-footer > span:first-child { letter-spacing: 2px; }
 :focus-visible { outline: 2px solid var(--gold); outline-offset: 5px; }
@@ -143,6 +178,11 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .panel-heading h2 { font-size: 20px; }
   .field-row { grid-template-columns: 1fr; gap: 19px; }
   .field input { font-size: 16px; }
+  .role-section { margin-top: 44px; }
+  .role-actions { grid-template-columns: 1fr; }
+  .role-actions > :last-child:nth-child(odd) { grid-column: auto; }
+  .role-section-heading { gap: 13px; padding: 0; }
+  .role-section-heading > span { width: 34px; height: 34px; }
   .site-footer { margin-top: 45px; padding: 20px; flex-direction: column; gap: 10px; text-align: center; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -166,7 +206,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .stars::after { transform: translate(97px, 53px); background-size: 853px 593px; animation-duration: 6s; animation-delay: -3s; }
 .horizon-glow { animation: atmosphere-breathe 9s ease-in-out infinite alternate; }
 .hero h1 span {
-  background: linear-gradient(115deg, #fff8e7 10%, #edd4a7 48%, #b99962 95%);
+  background: linear-gradient(115deg, #fff8e7 10%, #edb0a7 48%, #b96e62 95%);
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
@@ -185,7 +225,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .status-card { transition: border-color .25s, box-shadow .25s; }
 .status-card:hover { border-color: #d6b57970; box-shadow: 0 0 30px #c79b3610; }
-.create-button:hover:not(:disabled) { box-shadow: 0 0 35px #c89c4959, inset 0 1px #fff7d7; }
+.create-button:hover:not(:disabled) { box-shadow: 0 0 35px #c89c4959, inset 0 1px #ffdad7; }
 @keyframes star-twinkle { from { opacity: .18; } to { opacity: 1; } }
 
 @keyframes atmosphere-breathe { from { opacity: .65; } to { opacity: 1; } }
@@ -198,7 +238,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .stars { opacity: 1; }
 .stars::before, .stars::after {
   background-image:
-    radial-gradient(circle at 18% 24%, #fff 0 1px, #ffdf9bb3 1.5px, #e1b56833 3px, transparent 7px),
+    radial-gradient(circle at 18% 24%, #fff 0 1px, #ffb99bb3 1.5px, #e1806833 3px, transparent 7px),
     radial-gradient(circle at 78% 16%, #fff8e4 0 1px, #dbe8ffaa 1.5px, transparent 5px),
     radial-gradient(circle at 89% 48%, #fff 0 1.2px, #bacfed88 2px, transparent 7px),
     radial-gradient(circle at 33% 47%, #fff2d1 0 1px, #f9e5b788 2px, transparent 6px),

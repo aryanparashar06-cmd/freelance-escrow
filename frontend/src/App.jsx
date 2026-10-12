@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { ethers } from "ethers";
-import { LOCAL_CHAIN_ID, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import {
+  LOCAL_CHAIN_ID,
+  NETWORK_LABEL,
+  NETWORK_NAME,
+  WRONG_NETWORK_MESSAGE,
+  ESCROW_ADDRESS,
+  ESCROW_ABI,
+} from "./escrow";
 import "./App.css";
 import AcceptJob from "./AcceptJob";
 import SubmitWork from "./SubmitWork";
@@ -9,6 +16,7 @@ import RaiseDispute from "./RaiseDispute";
 import ResolveDispute from "./ResolveDispute";
 import RefundAfterDeadline from "./RefundAfterDeadline";
 import ClaimAfterReviewTimeout from "./ClaimAfterReviewTimeout";
+import JobDashboard from "./JobDashboard";
 
 function App() {
   const [account, setAccount] = useState("");
@@ -39,7 +47,7 @@ function App() {
       const provider = new ethers.BrowserProvider(window.ethereum);
       const networkData = await provider.getNetwork();
       if (networkData.chainId !== LOCAL_CHAIN_ID) {
-        throw new Error("Select Hardhat Localhost (Chain ID: 31337) in MetaMask.");
+        throw new Error(WRONG_NETWORK_MESSAGE);
       }
       const accounts = await provider.send("eth_accounts", []);
       if (!accounts.length || accounts[0].toLowerCase() !== account.toLowerCase()) {
@@ -91,16 +99,17 @@ function App() {
         throw new Error("Your wallet account changed. Try again with the selected account.");
       }
       if (BigInt(await provider.send("eth_chainId", [])) !== LOCAL_CHAIN_ID) {
-        throw new Error("Network changed. Select Hardhat Localhost (Chain ID: 31337).");
+        throw new Error(`Network changed. Select ${NETWORK_LABEL}.`);
       }
       const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
-      setTransactionStatus("Waiting for MetaMask confirmation. Review and confirm the transaction in MetaMask.");
+      setTransactionStatus("Waiting for MetaMask confirmation...");
       const tx = await contract.createJob(title, freelancer, arbitrator, deadlineTimestamp, {
         value: ethers.parseEther(paymentAmount),
       });
       setTransactionHash(tx.hash);
       setTransactionStatus("Transaction submitted. Waiting for blockchain confirmation...");
-      await tx.wait();
+      const receipt = await tx.wait();
+      if (receipt.status !== 1) throw new Error("The transaction was mined but did not succeed.");
       setTransactionStatus("Transaction confirmed. Job created successfully.");
       form.reset();
       // Reuse the guarded read effect; a failed count refresh does not undo success.
@@ -160,9 +169,9 @@ function App() {
         const networkData = await provider.getNetwork();
         if (currentRequest !== requestId) return;
 
-        setNetwork(`${networkData.name} (Chain ID: ${networkData.chainId})`);
+        setNetwork(`${NETWORK_NAME} (Chain ID: ${networkData.chainId})`);
         if (networkData.chainId !== LOCAL_CHAIN_ID) {
-          setReadError("Wrong network. Select Hardhat Localhost (Chain ID: 31337) in MetaMask.");
+          setReadError(WRONG_NETWORK_MESSAGE);
           return;
         }
 
@@ -236,7 +245,7 @@ function App() {
           <p className="eyebrow">A new horizon for freelance trust</p>
           <h1 id="hero-title">FREELANCE <span>ESCROW</span></h1>
           <p className="subtitle">Decentralized escrow for secure freelance transactions</p>
-          <a className="hero-link" href="#create-job">Create your next opportunity <span aria-hidden="true">↓</span></a>
+          <a className="hero-link" href="#job-dashboard">Explore the escrow workspace <span aria-hidden="true">↓</span></a>
           <div className="hero-caption" aria-hidden="true"><span /> BUILT ON ETHEREUM <span /></div>
         </section>
 
@@ -251,14 +260,14 @@ function App() {
                   {connecting ? "Connecting..." : "Connect MetaMask"} <span aria-hidden="true">↗</span>
                 </button>
               )}
-              <p className="status-detail">{account ? "Connected as client" : window.ethereum
+              <p className="status-detail">{account ? "Load a job to detect your role" : window.ethereum
                 ? "Connect to begin your next project"
                 : "Install MetaMask to continue"}</p>
             </div>
             <div className="status-card">
               <span className="status-label">02 / NETWORK</span>
-              <p className="status-value">{account ? network || "Loading..." : "Hardhat Localhost"}</p>
-              <p className="status-detail">Local development · Chain ID 31337</p>
+              <p className="status-value">{account ? network || "Loading..." : NETWORK_NAME}</p>
+              <p className="status-detail">Configured network · Chain ID {LOCAL_CHAIN_ID.toString()}</p>
             </div>
             <div className="status-card jobs-card">
               <span className="status-label">03 / TOTAL JOBS</span>
@@ -271,58 +280,112 @@ function App() {
             <p className="error" role="alert">{error || readError}</p>
           )}
 
-          <div className="form-panel" id="create-job">
-            <div className="panel-heading">
+          <JobDashboard account={account} />
+
+          <section className="role-section" aria-labelledby="client-actions-title">
+            <div className="role-section-heading">
+              <span>01</span>
               <div>
-                <p className="eyebrow">YOUR NEXT CHAPTER</p>
-                <h2>Create escrow job</h2>
+                <p className="eyebrow">CLIENT WORKSPACE</p>
+                <h2 id="client-actions-title">Fund and finalize work</h2>
+                <p>Create an escrow, approve a submitted result, or reclaim funds after an eligible deadline.</p>
               </div>
-              <span className="panel-symbol" aria-hidden="true">◇</span>
             </div>
-            <p className="panel-intro">Great work starts with trust. Define your project and secure its payment in escrow.</p>
-            <form className="create-job" onSubmit={createJob}>
-              <fieldset disabled={submitting}>
-                <div className="field">
-                  <label htmlFor="title">Job title</label>
-                  <input id="title" name="title" type="text" required placeholder="e.g. Design and build a landing page" />
-                </div>
-                <div className="field">
-                  <label htmlFor="freelancer">Freelancer wallet address</label>
-                  <input id="freelancer" name="freelancer" type="text" required placeholder="0x..." />
-                </div>
-                <div className="field">
-                  <label htmlFor="arbitrator">Arbitrator wallet address</label>
-                  <input id="arbitrator" name="arbitrator" type="text" required placeholder="0x..." />
-                </div>
-                <p className="field-note">You are the client. Use a different wallet address for each of the three roles.</p>
-                <div className="field-row">
-                  <div className="field">
-                    <label htmlFor="deadline">Deadline <span>· local time</span></label>
-                    <input id="deadline" name="deadline" type="datetime-local" required />
+            <div className="role-actions">
+              <div className="form-panel" id="create-job">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">YOUR NEXT CHAPTER</p>
+                    <h2>Create escrow job</h2>
                   </div>
-                  <div className="field">
-                    <label htmlFor="paymentAmount">Escrow amount <span>· ETH</span></label>
-                    <input id="paymentAmount" name="paymentAmount" type="text" inputMode="decimal" required placeholder="0.01" />
-                  </div>
+                  <span className="panel-symbol" aria-hidden="true">◇</span>
                 </div>
-                <button className="create-button" type="submit" disabled={!account || submitting}>
-                  {submitting ? "Creating job..." : "Create Job"} <span aria-hidden="true">↗</span>
-                </button>
-              </fieldset>
-              <p className="form-note">Payment is held on Hardhat Localhost. MetaMask approval and local ETH for payment plus gas are required.</p>
-            </form>
-            {transactionStatus && <p className="transaction" role="status">{transactionStatus}</p>}
-            {transactionError && <p className="error" role="alert">{transactionError}</p>}
-            {transactionHash && <p className="transaction transaction-hash">Transaction hash: {transactionHash}</p>}
-          </div>
-          <AcceptJob account={account} />
-          <SubmitWork account={account} />
-          <ApproveWork account={account} />
-          <RaiseDispute account={account} />
-          <ResolveDispute account={account} />
-          <RefundAfterDeadline account={account} />
-          <ClaimAfterReviewTimeout account={account} />
-          <p className="security-note">Reading Total Jobs does not require gas or transaction approval.<br />This application does not access your private key.</p>
+                <p className="panel-intro">Great work starts with trust. Define your project and secure its payment in escrow.</p>
+                <form className="create-job" onSubmit={createJob}>
+                  <fieldset disabled={submitting}>
+                    <div className="field">
+                      <label htmlFor="title">Job title</label>
+                      <input id="title" name="title" type="text" required placeholder="e.g. Design and build a landing page" />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="freelancer">Freelancer wallet address</label>
+                      <input id="freelancer" name="freelancer" type="text" required placeholder="0x..." />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="arbitrator">Arbitrator wallet address</label>
+                      <input id="arbitrator" name="arbitrator" type="text" required placeholder="0x..." />
+                    </div>
+                    <p className="field-note">You are the client. Use a different wallet address for each of the three roles.</p>
+                    <div className="field-row">
+                      <div className="field">
+                        <label htmlFor="deadline">Deadline <span>· local time</span></label>
+                        <input id="deadline" name="deadline" type="datetime-local" required />
+                      </div>
+                      <div className="field">
+                        <label htmlFor="paymentAmount">Escrow amount <span>· ETH</span></label>
+                        <input id="paymentAmount" name="paymentAmount" type="text" inputMode="decimal" required placeholder="0.01" />
+                      </div>
+                    </div>
+                    <button className="create-button" type="submit" disabled={!account || submitting}>
+                      {submitting ? "Creating job..." : "Create Job"} <span aria-hidden="true">↗</span>
+                    </button>
+                  </fieldset>
+                  <p className="form-note">Payment is held on {NETWORK_NAME}. MetaMask approval and ETH for payment plus gas are required.</p>
+                </form>
+                {transactionStatus && <p className="transaction" role="status">{transactionStatus}</p>}
+                {transactionError && <p className="error" role="alert">{transactionError}</p>}
+                {transactionHash && <p className="transaction transaction-hash">Transaction hash: {transactionHash}</p>}
+              </div>
+              <ApproveWork account={account} />
+              <RefundAfterDeadline account={account} />
+            </div>
+          </section>
+
+          <section className="role-section" aria-labelledby="freelancer-actions-title">
+            <div className="role-section-heading">
+              <span>02</span>
+              <div>
+                <p className="eyebrow">FREELANCER WORKSPACE</p>
+                <h2 id="freelancer-actions-title">Accept, deliver, and claim</h2>
+                <p>Accept assigned work, submit proof, or claim payment after the on-chain review period.</p>
+              </div>
+            </div>
+            <div className="role-actions">
+              <AcceptJob account={account} />
+              <SubmitWork account={account} />
+              <ClaimAfterReviewTimeout account={account} />
+            </div>
+          </section>
+
+          <section className="role-section shared-actions" aria-labelledby="shared-actions-title">
+            <div className="role-section-heading">
+              <span>03</span>
+              <div>
+                <p className="eyebrow">SHARED SAFEGUARD</p>
+                <h2 id="shared-actions-title">Client or freelancer dispute</h2>
+                <p>Either project participant can pause the normal release path after work is submitted.</p>
+              </div>
+            </div>
+            <div className="role-actions single-action">
+              <RaiseDispute account={account} />
+            </div>
+          </section>
+
+          <section className="role-section" aria-labelledby="arbitrator-actions-title">
+            <div className="role-section-heading">
+              <span>04</span>
+              <div>
+                <p className="eyebrow">ARBITRATOR WORKSPACE</p>
+                <h2 id="arbitrator-actions-title">Resolve disputed escrow</h2>
+                <p>The designated arbitrator decides whether funds return to the client or release to the freelancer.</p>
+              </div>
+            </div>
+            <div className="role-actions single-action">
+              <ResolveDispute account={account} />
+            </div>
+          </section>
+
+          <p className="security-note">Reading contract data does not require gas or transaction approval.<br />This application does not access your private key.</p>
         </section>
       </main>
       <footer className="site-footer"><span>FREELANCE ESCROW</span><span>Powered by smart contracts. Built on trust.</span></footer>
