@@ -9,5 +9,7 @@ export const ESCROW_ABI = [
   "function raiseDispute(uint256 _jobId)",
   "function resolveDispute(uint256 _jobId, uint8 _decision)",
   "function refundAfterDeadline(uint256 _jobId)",
+  "function claimAfterReviewTimeout(uint256 _jobId)",
+  "function REVIEW_PERIOD() view returns (uint256)",
   "function jobs(uint256) view returns (address client, address freelancer, address arbitrator, uint256 amount, string title, uint256 deadline, uint256 createdAt, uint256 submittedAt, string workProof, uint8 state)",
 ];

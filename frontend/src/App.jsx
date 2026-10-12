@@ -8,6 +8,7 @@ import ApproveWork from "./ApproveWork";
 import RaiseDispute from "./RaiseDispute";
 import ResolveDispute from "./ResolveDispute";
 import RefundAfterDeadline from "./RefundAfterDeadline";
+import ClaimAfterReviewTimeout from "./ClaimAfterReviewTimeout";
 
 function App() {
   const [account, setAccount] = useState("");
@@ -320,6 +321,7 @@ function App() {
           <RaiseDispute account={account} />
           <ResolveDispute account={account} />
           <RefundAfterDeadline account={account} />
+          <ClaimAfterReviewTimeout account={account} />
           <p className="security-note">Reading Total Jobs does not require gas or transaction approval.<br />This application does not access your private key.</p>
         </section>
       </main>
