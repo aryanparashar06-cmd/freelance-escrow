@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -37,6 +39,7 @@ export default function AcceptJob({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
   const revision = useRef(0);
   const pending = useRef(false);
 
@@ -50,6 +53,7 @@ export default function AcceptJob({ account }) {
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -93,6 +97,7 @@ export default function AcceptJob({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -106,6 +111,10 @@ export default function AcceptJob({ account }) {
         if (current !== revision.current) return;
         // Authorization and job-state checks belong to the Solidity contract.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.acceptJob.estimateGas(id));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
         const tx = await contract.acceptJob(id);
         if (current === revision.current) {
@@ -167,7 +176,8 @@ export default function AcceptJob({ account }) {
       )}
       <button className="create-button accept-job-button" type="button" disabled={!account || busy || !job}
         onClick={() => void runAction(true)}>Accept Job</button>
-      <p className="form-note">Load the job first. Accepting requires MetaMask approval and local ETH for gas; no escrow payment is sent.</p>
+      <p className="form-note">Load the job first. Accepting requires MetaMask approval and ETH for the connected network fee; no escrow payment is sent.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="Accepting a job sends no escrow value; only the network fee is charged." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}

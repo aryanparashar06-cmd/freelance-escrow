@@ -17,6 +17,8 @@ import ResolveDispute from "./ResolveDispute";
 import RefundAfterDeadline from "./RefundAfterDeadline";
 import ClaimAfterReviewTimeout from "./ClaimAfterReviewTimeout";
 import JobDashboard from "./JobDashboard";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 
 function App() {
   const [account, setAccount] = useState("");
@@ -30,6 +32,7 @@ function App() {
   const [transactionStatus, setTransactionStatus] = useState("");
   const [transactionError, setTransactionError] = useState("");
   const [transactionHash, setTransactionHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
 
   async function createJob(event) {
     event.preventDefault();
@@ -41,6 +44,7 @@ function App() {
     setTransactionError("");
     setTransactionStatus("");
     setTransactionHash("");
+    setGasEstimate(null);
 
     try {
       if (!window.ethereum || !account) throw new Error("Connect MetaMask before creating a job.");
@@ -102,9 +106,18 @@ function App() {
         throw new Error(`Network changed. Select ${NETWORK_LABEL}.`);
       }
       const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+      setTransactionStatus("Estimating gas with the connected network...");
+      const estimate = await estimateGasCost(provider, () => contract.createJob.estimateGas(
+        title,
+        freelancer,
+        arbitrator,
+        deadlineTimestamp,
+        { value: paymentWei },
+      ));
+      setGasEstimate(estimate);
       setTransactionStatus("Waiting for MetaMask confirmation...");
       const tx = await contract.createJob(title, freelancer, arbitrator, deadlineTimestamp, {
-        value: ethers.parseEther(paymentAmount),
+        value: paymentWei,
       });
       setTransactionHash(tx.hash);
       setTransactionStatus("Transaction submitted. Waiting for blockchain confirmation...");
@@ -192,6 +205,7 @@ function App() {
       setJobCount(null);
       setReadError("");
       setError("");
+      setGasEstimate(null);
     }
 
     function handleAccountsChanged(accounts) {
@@ -334,6 +348,7 @@ function App() {
                 </form>
                 {transactionStatus && <p className="transaction" role="status">{transactionStatus}</p>}
                 {transactionError && <p className="error" role="alert">{transactionError}</p>}
+                <GasEstimate estimate={gasEstimate} valueNote="The escrow payment amount is additional value locked by the contract and is not part of this network fee." />
                 {transactionHash && <p className="transaction transaction-hash">Transaction hash: {transactionHash}</p>}
               </div>
               <ApproveWork account={account} />

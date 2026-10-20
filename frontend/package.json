@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test:unit": "node --test src/workProof.test.js src/gasCosts.test.js src/uploadClient.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

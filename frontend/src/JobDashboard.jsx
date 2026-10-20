@@ -6,6 +6,7 @@ import {
   LOCAL_CHAIN_ID,
   WRONG_NETWORK_MESSAGE,
 } from "./escrow";
+import { analyzeWorkProof, calculateFileSha256, formatFileSize } from "./workProof";
 import "./JobDashboard.css";
 
 const JOB_STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -36,6 +37,7 @@ function JobDashboard({ account }) {
   const [reviewPeriod, setReviewPeriod] = useState(REVIEW_PERIOD_FALLBACK);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [verification, setVerification] = useState(null);
 
   async function loadJob(event) {
     event.preventDefault();
@@ -44,6 +46,7 @@ function JobDashboard({ account }) {
     setLoading(true);
     setError("");
     setJob(null);
+    setVerification(null);
 
     try {
       if (!window.ethereum) throw new Error("MetaMask is required to load a job.");
@@ -117,6 +120,26 @@ function JobDashboard({ account }) {
   const timeoutEligible = Boolean(
     job && job.state === 3 && chainTime && chainTime > eligibleClaimTime,
   );
+  const proofAnalysis = analyzeWorkProof(job?.workProof || "");
+
+  async function verifyDownloadedFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !proofAnalysis.checksum) return;
+    setVerification({ status: "checking", message: "Calculating SHA-256 locally..." });
+    try {
+      const digest = await calculateFileSha256(file);
+      const matches = digest.toLowerCase() === proofAnalysis.checksum.toLowerCase();
+      setVerification({
+        status: matches ? "match" : "mismatch",
+        message: matches
+          ? `${file.name} (${formatFileSize(file.size)}) matches the recorded SHA-256 checksum.`
+          : `${file.name} does not match the recorded SHA-256 checksum.`,
+      });
+    } catch (verificationError) {
+      setVerification({ status: "error", message: verificationError.message || "Unable to verify this file." });
+    }
+  }
 
   const renderStage = (name) => (
     <span className={stateName === name ? "lifecycle-stage current" : "lifecycle-stage"}>
@@ -181,7 +204,26 @@ function JobDashboard({ account }) {
             <div><span>Submitted</span><strong>{formatTimestamp(job.submittedAt)}</strong></div>
             <div className="proof-detail">
               <span>Work proof</span>
-              <strong>{job.workProof || "No proof submitted"}</strong>
+              <strong className="proof-value">{job.workProof || "No proof submitted"}</strong>
+              {job.workProof && <small>{proofAnalysis.label || "Stored proof reference"}</small>}
+              {proofAnalysis.type === "ipfs" && (
+                <a href={proofAnalysis.gatewayUrl} target="_blank" rel="noopener noreferrer">
+                  Open Deliverable through configured IPFS gateway ↗
+                </a>
+              )}
+              {proofAnalysis.type === "ipfs" && (
+                <em>The external gateway is contacted only when you click. A CID identifies content but does not prove quality, correctness, availability, or confidentiality.</em>
+              )}
+              {proofAnalysis.type === "ipfs" && proofAnalysis.checksum && (
+                <div className="proof-verification">
+                  <label className="file-picker">
+                    Verify a local downloaded file
+                    <input type="file" onChange={verifyDownloadedFile} />
+                  </label>
+                  <small>Comparison happens locally against the SHA-256 checksum stored in the proof.</small>
+                  {verification && <strong className={`verification-${verification.status}`} role="status">{verification.message}</strong>}
+                </div>
+              )}
             </div>
           </div>
 

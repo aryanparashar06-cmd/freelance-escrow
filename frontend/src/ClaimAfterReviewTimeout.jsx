@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -53,6 +55,7 @@ export default function ClaimAfterReviewTimeout({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
   const revision = useRef(0);
   const pending = useRef(false);
 
@@ -65,6 +68,7 @@ export default function ClaimAfterReviewTimeout({ account }) {
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -126,6 +130,7 @@ export default function ClaimAfterReviewTimeout({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -156,6 +161,10 @@ export default function ClaimAfterReviewTimeout({ account }) {
         if (current !== revision.current) return;
         // UI checks aid usability; the Solidity contract remains authoritative.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.claimAfterReviewTimeout.estimateGas(id));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
         const tx = await contract.claimAfterReviewTimeout(id);
         if (current === revision.current) {
@@ -232,7 +241,8 @@ export default function ClaimAfterReviewTimeout({ account }) {
         && <p className="form-note">The review period has not passed on the blockchain. Eligibility requires a timestamp strictly after the eligible claim time.</p>}
       {job && account && job.freelancer.toLowerCase() !== account.toLowerCase()
         && <p className="form-note">Select the assigned freelancer wallet in MetaMask to claim payment.</p>}
-      <p className="form-note">This prevents correctly submitted work from remaining unpaid indefinitely. Eligibility uses mined blockchain time; use Load Job again after a later block is mined. Claiming requires MetaMask approval and local ETH for gas.</p>
+      <p className="form-note">This prevents correctly submitted work from remaining unpaid indefinitely. Eligibility uses mined blockchain time; use Load Job again after a later block is mined. Claiming requires MetaMask approval and ETH for the connected network fee.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="The escrow release is separate from the freelancer's network fee." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}

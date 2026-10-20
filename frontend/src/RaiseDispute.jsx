@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -41,6 +43,7 @@ export default function RaiseDispute({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
   const revision = useRef(0);
   const pending = useRef(false);
 
@@ -54,6 +57,7 @@ export default function RaiseDispute({ account }) {
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -97,6 +101,7 @@ export default function RaiseDispute({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -122,6 +127,10 @@ export default function RaiseDispute({ account }) {
         if (current !== revision.current) return;
         // These UI checks help usability; Solidity remains the security authority.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.raiseDispute.estimateGas(id));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
         const tx = await contract.raiseDispute(id);
         if (current === revision.current) {
@@ -192,7 +201,8 @@ export default function RaiseDispute({ account }) {
       {job && job.state !== 3n && <p className="form-note">A dispute can only be raised when the job is SUBMITTED.</p>}
       {job && account && !isParty(job, account)
         && <p className="form-note">Select the client or assigned freelancer wallet in MetaMask to raise a dispute.</p>}
-      <p className="form-note">Once a dispute is raised, normal approval and the review-timeout claim are no longer available. The designated arbitrator must resolve the dispute. Raising a dispute does not release payment; MetaMask approval and local ETH for gas are required.</p>
+      <p className="form-note">Once a dispute is raised, normal approval and the review-timeout claim are no longer available. The designated arbitrator must resolve the dispute. Raising a dispute does not release payment; MetaMask approval and ETH for the connected network fee are required.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="Raising a dispute moves no escrow value; only the network fee is charged." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}

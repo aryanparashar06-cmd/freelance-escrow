@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -38,6 +40,7 @@ export default function RefundAfterDeadline({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
   const revision = useRef(0);
   const pending = useRef(false);
 
@@ -51,6 +54,7 @@ export default function RefundAfterDeadline({ account }) {
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -97,6 +101,7 @@ export default function RefundAfterDeadline({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -125,6 +130,10 @@ export default function RefundAfterDeadline({ account }) {
         if (current !== revision.current) return;
         // These UI checks help usability; Solidity remains the security authority.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.refundAfterDeadline.estimateGas(id));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
         const tx = await contract.refundAfterDeadline(id);
         if (current === revision.current) {
@@ -196,7 +205,8 @@ export default function RefundAfterDeadline({ account }) {
       {job && job.blockchainTime <= job.deadline && <p className="form-note">The deadline has not passed on the blockchain. Refund requires a block timestamp strictly after the deadline.</p>}
       {job && account && job.client.toLowerCase() !== account.toLowerCase()
         && <p className="form-note">Select the client wallet in MetaMask to request a refund.</p>}
-      <p className="form-note">Eligibility uses the latest mined block, not your computer clock. Click Load Job to refresh the blockchain time after a new block is mined. Refunding returns escrow to the client and requires MetaMask approval plus local ETH for gas.</p>
+      <p className="form-note">Eligibility uses the latest mined block, not your computer clock. Click Load Job to refresh the blockchain time after a new block is mined. Refunding returns escrow to the client and requires MetaMask approval plus ETH for the connected network fee.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="The returned escrow is separate from the client's network fee." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}

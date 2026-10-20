@@ -1,6 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
+import {
+  MAX_HASH_FILE_BYTES,
+  analyzeWorkProof,
+  calculateFileSha256,
+  formatFileSize,
+  validateWorkProof,
+} from "./workProof";
+import {
+  requestUploadAuthorization,
+  submitWorkProofTransaction,
+  uploadFileToIpfs,
+  validateDeliverableFile,
+} from "./uploadClient";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -38,35 +53,114 @@ export default function SubmitWork({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileName, setFileName] = useState("");
+  const [fileSize, setFileSize] = useState(0);
+  const [fileType, setFileType] = useState("");
+  const [fileDigest, setFileDigest] = useState("");
+  const [fileHashError, setFileHashError] = useState("");
+  const [hashingFile, setHashingFile] = useState(false);
+  const [copied, setCopied] = useState("");
+  const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
+  const [publicUploadConfirmed, setPublicUploadConfirmed] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [uploadedFile, setUploadedFile] = useState(null);
   const revision = useRef(0);
+  const fileRevision = useRef(0);
   const pending = useRef(false);
+  const uploadController = useRef(null);
 
-  // Discard stale details and replies when the wallet context changes.
   useEffect(() => {
     const wallet = window.ethereum;
     const requests = revision;
     function clearDetails() {
       requests.current++;
+      uploadController.current?.abort();
       setJob(null);
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
+      setUploadedFile(null);
+      setUploadStatus("");
+      setUploadError("");
+      setUploadProgress(0);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
     return () => {
       requests.current++;
+      uploadController.current?.abort();
       wallet?.removeListener("accountsChanged", clearDetails);
       wallet?.removeListener("chainChanged", clearDetails);
     };
   }, []);
 
-  async function getProvider() {
-    if (!window.ethereum || !account) throw new Error("Connect MetaMask before loading or submitting work.");
-    const provider = new ethers.BrowserProvider(window.ethereum);
-    if ((await provider.getNetwork()).chainId !== LOCAL_CHAIN_ID) {
-      throw new Error(WRONG_NETWORK_MESSAGE);
+  async function handleFileSelection(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const current = ++fileRevision.current;
+    setSelectedFile(null);
+    setFileName(file.name);
+    setFileSize(file.size);
+    setFileType(file.type || "application/octet-stream");
+    setFileDigest("");
+    setFileHashError("");
+    setCopied("");
+    setUploadedFile(null);
+    setUploadStatus("");
+    setUploadError("");
+    setUploadProgress(0);
+    setPublicUploadConfirmed(false);
+    setHashingFile(true);
+    try {
+      validateDeliverableFile(file);
+      const digest = await calculateFileSha256(file);
+      if (current !== fileRevision.current) return;
+      setSelectedFile(file);
+      setFileDigest(digest);
+    } catch (err) {
+      if (current === fileRevision.current) setFileHashError(err.message || "The selected file could not be prepared.");
+    } finally {
+      if (current === fileRevision.current) setHashingFile(false);
     }
+  }
+
+  async function copyText(value, label) {
+    setFileHashError("");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable in this browser.");
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+    } catch (err) {
+      setCopied("");
+      setFileHashError(err.message || "Unable to copy. Select and copy the value manually.");
+    }
+  }
+
+  function insertDigest() {
+    if (!fileDigest) return;
+    const reference = `sha256:${fileDigest}`;
+    setWorkProof((current) => current.trim() ? `${current.trim()}\n${reference}` : reference);
+    setGasEstimate(null);
+  }
+
+  function insertUploadedProof() {
+    if (!uploadedFile) return;
+    const reference = `${uploadedFile.uri}\nsha256:${fileDigest}`;
+    setWorkProof(reference);
+    setGasEstimate(null);
+  }
+
+  async function getProvider() {
+    if (!window.ethereum || !account) throw new Error("Connect MetaMask before loading, uploading, or submitting work.");
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    if ((await provider.getNetwork()).chainId !== LOCAL_CHAIN_ID) throw new Error(WRONG_NETWORK_MESSAGE);
     const accounts = await provider.send("eth_accounts", []);
     if (!accounts.length || accounts[0].toLowerCase() !== account.toLowerCase()) {
       throw new Error("Wallet changed or disconnected. Reconnect and try again.");
@@ -86,6 +180,53 @@ export default function SubmitWork({ account }) {
       deadline: result.deadline, workProof: result.workProof, state: result.state };
   }
 
+  async function handleUpload() {
+    if (uploadBusy) return;
+    setUploadBusy(true);
+    setUploadError("");
+    setUploadStatus("");
+    setUploadProgress(0);
+    const controller = new AbortController();
+    uploadController.current = controller;
+    try {
+      if (!publicUploadConfirmed) throw new Error("Acknowledge the public IPFS warning before uploading.");
+      validateDeliverableFile(selectedFile);
+      if (!fileDigest) throw new Error("Wait for the SHA-256 checksum before uploading.");
+      const id = parseJobId(jobId);
+      const provider = await getProvider();
+      const details = await readJob(provider, id);
+      setJob(details);
+      if (details.state !== 2n) throw new Error("The job must be ACCEPTED before a deliverable can be uploaded.");
+      if (details.freelancer.toLowerCase() !== account.toLowerCase()) {
+        throw new Error("Only the assigned freelancer can upload a deliverable for this job.");
+      }
+      setUploadStatus("Requesting a one-time upload challenge. MetaMask will ask you to sign a message...");
+      const authorization = await requestUploadAuthorization({
+        provider,
+        account,
+        jobId: id,
+        file: selectedFile,
+        sha256: fileDigest,
+        signal: controller.signal,
+      });
+      setUploadStatus("Wallet authorized. Uploading file directly to public IPFS through Pinata...");
+      const result = await uploadFileToIpfs({
+        uploadUrl: authorization.uploadUrl,
+        file: selectedFile,
+        signal: controller.signal,
+        onProgress: setUploadProgress,
+      });
+      setUploadedFile(result);
+      setUploadStatus("File uploaded to IPFS. Review the CID, then explicitly insert and submit the proof on-chain.");
+    } catch (err) {
+      setUploadStatus("");
+      setUploadError(errorMessage(err));
+    } finally {
+      if (uploadController.current === controller) uploadController.current = null;
+      setUploadBusy(false);
+    }
+  }
+
   async function runAction(submit) {
     if (pending.current) return;
     pending.current = true;
@@ -94,6 +235,7 @@ export default function SubmitWork({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -102,7 +244,10 @@ export default function SubmitWork({ account }) {
       let confirmedBlock = "latest";
       if (submit) {
         const proof = workProof.trim();
-        if (!proof) throw new Error("Enter a non-empty work proof.");
+        validateWorkProof(proof);
+        if (!privacyConfirmed) {
+          throw new Error("Confirm that you understand the work proof will be stored on a public, persistent blockchain record.");
+        }
         const details = await readJob(provider, id);
         if (current !== revision.current) return;
         setJob(details);
@@ -111,32 +256,35 @@ export default function SubmitWork({ account }) {
           throw new Error("Only the assigned freelancer can submit work. Select that wallet in MetaMask.");
         }
         const signer = await provider.getSigner(account);
-        if (BigInt(await provider.send("eth_chainId", [])) !== LOCAL_CHAIN_ID) {
-          throw new Error(WRONG_NETWORK_MESSAGE);
-        }
+        if (BigInt(await provider.send("eth_chainId", [])) !== LOCAL_CHAIN_ID) throw new Error(WRONG_NETWORK_MESSAGE);
         if (current !== revision.current) return;
         if ((await signer.getAddress()).toLowerCase() !== details.freelancer.toLowerCase()) {
           throw new Error("Select the assigned freelancer wallet in MetaMask.");
         }
         if (current !== revision.current) return;
-        // These UI checks help usability; Solidity remains the security authority.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.submitWork.estimateGas(id, proof));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
-        const tx = await contract.submitWork(id, proof);
-        if (current === revision.current) {
-          setHash(tx.hash);
-          setStatus("Transaction submitted. Waiting for blockchain confirmation...");
-        }
-        const receipt = await tx.wait();
-        if (!receipt || receipt.status !== 1) throw new Error("Transaction was not confirmed successfully.");
+        const { receipt } = await submitWorkProofTransaction({
+          contract,
+          jobId: id,
+          proof,
+          onSubmitted: (transactionHash) => {
+            if (current !== revision.current) return;
+            setHash(transactionHash);
+            setStatus("Transaction submitted. Waiting for blockchain confirmation...");
+          },
+        });
         if (current !== revision.current) return;
         confirmedBlock = receipt.blockNumber;
         setWorkProof("");
+        setPrivacyConfirmed(false);
         setStatus(`Transaction confirmed. Job ${id} work submitted successfully. State: SUBMITTED.`);
       }
-      // Keep transaction success separate from a failed details refresh.
       try {
-        // Read the confirmed block to avoid a cached pre-submission result.
         const details = await readJob(provider, id, confirmedBlock);
         if (current === revision.current) setJob(details);
       } catch (err) {
@@ -153,22 +301,37 @@ export default function SubmitWork({ account }) {
     }
   }
 
+  const proofAnalysis = analyzeWorkProof(workProof);
+  const eligibleWallet = Boolean(job && account && job.state === 2n
+    && job.freelancer.toLowerCase() === account.toLowerCase());
+
   return (
     <section className="form-panel accept-job-panel" aria-labelledby="submit-work-heading">
       <div className="panel-heading">
         <div><p className="eyebrow">FOR FREELANCERS</p><h2 id="submit-work-heading">Submit Work</h2></div>
         <span className="panel-symbol" aria-hidden="true">◇</span>
       </div>
-      <p className="panel-intro">Load an accepted job, then submit your work proof using the assigned freelancer wallet.</p>
+      <p className="panel-intro">Load an accepted job, upload an optional deliverable, then submit the reviewed proof using the assigned freelancer wallet.</p>
       {!account && <p className="form-note">Connect MetaMask using the wallet button above.</p>}
       <form className="create-job" onSubmit={(event) => { event.preventDefault(); void runAction(false); }}>
-        <fieldset disabled={busy}>
+        <fieldset disabled={busy || uploadBusy}>
           <div className="field">
             <label htmlFor="submit-work-job-id">Job ID</label>
             <input id="submit-work-job-id" inputMode="numeric" placeholder="e.g. 1" required value={jobId}
-              onChange={(event) => { revision.current++; setJobId(event.target.value); setJob(null); setError(""); setStatus(""); setHash(""); }} />
+              onChange={(event) => {
+                revision.current++;
+                uploadController.current?.abort();
+                setJobId(event.target.value);
+                setJob(null);
+                setError("");
+                setStatus("");
+                setHash("");
+                setUploadedFile(null);
+                setUploadStatus("");
+                setUploadError("");
+              }} />
           </div>
-          <button className="create-button" type="submit" disabled={!account || busy}>Load Job</button>
+          <button className="create-button" type="submit" disabled={!account || busy || uploadBusy}>Load Job</button>
         </fieldset>
       </form>
       {job && (
@@ -184,23 +347,117 @@ export default function SubmitWork({ account }) {
           {job.workProof && <div><dt>Stored work proof</dt><dd>{job.workProof}</dd></div>}
         </dl>
       )}
+
+      <div className="file-hash-tool upload-deliverable">
+        <div className="file-hash-heading">
+          <div>
+            <span className="proof-kicker">STEP 1 · OPTIONAL OFF-CHAIN FILE</span>
+            <strong>Upload deliverable to public IPFS</strong>
+          </div>
+          <label className={hashingFile || uploadBusy ? "file-picker disabled" : "file-picker"}>
+            {hashingFile ? "Hashing file..." : "Choose file"}
+            <input type="file" onChange={handleFileSelection} disabled={hashingFile || uploadBusy || busy} />
+          </label>
+        </div>
+        <p>Choosing a file calculates its SHA-256 checksum locally. Nothing is uploaded until you press Upload to IPFS. The limit is {formatFileSize(MAX_HASH_FILE_BYTES)}.</p>
+        {fileName && (
+          <div className="file-hash-result" aria-live="polite">
+            <span>Selected file</span>
+            <strong>{fileName} · {formatFileSize(fileSize)} · {fileType}</strong>
+            {hashingFile && <em>Reading and calculating SHA-256...</em>}
+            {fileDigest && (
+              <>
+                <span>SHA-256 digest</span>
+                <code>{fileDigest}</code>
+                <div className="proof-tool-actions">
+                  <button type="button" onClick={() => void copyText(`sha256:${fileDigest}`, "hash")}>{copied === "hash" ? "Copied" : "Copy hash reference"}</button>
+                  <button type="button" onClick={insertDigest}>Insert hash only</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {fileHashError && <p className="inline-error" role="alert">{fileHashError}</p>}
+
+        <div className="privacy-warning upload-privacy-warning">
+          <strong>Public IPFS privacy warning</strong>
+          <p>Files uploaded to public IPFS may be accessible to anyone who obtains their CID. Do not upload passwords, private keys, confidential client information, personal documents or other sensitive deliverables.</p>
+          <p>This prototype does not encrypt files or provide private key sharing. Confidential deliverables need a separately designed encryption and key-sharing system.</p>
+          <label className="privacy-confirmation">
+            <input type="checkbox" checked={publicUploadConfirmed}
+              onChange={(event) => setPublicUploadConfirmed(event.target.checked)} />
+            I understand this file will be uploaded to public IPFS and may be publicly accessible.
+          </label>
+        </div>
+        <div className="upload-actions">
+          <button className="create-button" type="button" onClick={() => void handleUpload()}
+            disabled={!eligibleWallet || !selectedFile || !fileDigest || hashingFile || busy || uploadBusy || !publicUploadConfirmed || Boolean(uploadedFile)}>
+            {uploadBusy ? "Uploading..." : uploadedFile ? "Uploaded to IPFS" : "Upload to IPFS"} <span aria-hidden="true">↗</span>
+          </button>
+          {uploadBusy && (
+            <button className="secondary-action" type="button" onClick={() => uploadController.current?.abort()}>
+              Cancel upload
+            </button>
+          )}
+        </div>
+        {(uploadBusy || uploadProgress > 0) && (
+          <div className="upload-progress" aria-label={`Upload progress ${uploadProgress}%`}>
+            <span style={{ width: `${uploadProgress}%` }} /><b>{uploadProgress}%</b>
+          </div>
+        )}
+        {uploadStatus && <p className="transaction" role="status">{uploadStatus}</p>}
+        {uploadError && <p className="inline-error" role="alert">{uploadError}</p>}
+        {uploadedFile && (
+          <div className="upload-result">
+            <span>IPFS CID</span>
+            <code>{uploadedFile.cid}</code>
+            <span>IPFS URI</span>
+            <code>{uploadedFile.uri}</code>
+            <div className="proof-tool-actions">
+              <button type="button" onClick={() => void copyText(uploadedFile.cid, "cid")}>{copied === "cid" ? "CID copied" : "Copy CID"}</button>
+              <button type="button" onClick={() => void copyText(uploadedFile.uri, "uri")}>{copied === "uri" ? "URI copied" : "Copy URI"}</button>
+              <button type="button" onClick={insertUploadedProof}>Insert URI + checksum into proof</button>
+            </div>
+            <em>Upload succeeded off-chain. No blockchain transaction has been sent yet, and pinning does not guarantee permanent availability.</em>
+          </div>
+        )}
+      </div>
+
       <form className="create-job" onSubmit={(event) => { event.preventDefault(); void runAction(true); }}>
-        <fieldset disabled={busy}>
+        <fieldset disabled={busy || uploadBusy}>
           <div className="field">
-            <label htmlFor="submit-work-proof">Work proof</label>
-            <input id="submit-work-proof" type="text" required placeholder="URL, IPFS reference, hash, GitHub link, or other proof"
-              value={workProof} onChange={(event) => setWorkProof(event.target.value)} />
+            <label htmlFor="submit-work-proof">Step 2 · On-chain work proof</label>
+            <textarea id="submit-work-proof" required rows="5"
+              placeholder="Manual text, hash, GitHub link, CID, or the uploaded ipfs:// URI"
+              value={workProof} onChange={(event) => { setWorkProof(event.target.value); setGasEstimate(null); }} />
+            {workProof && proofAnalysis.type !== "invalid" && <span className="proof-type">Detected: {proofAnalysis.label}</span>}
+            {proofAnalysis.type === "invalid" && <span className="proof-validation" role="alert">{proofAnalysis.error}</span>}
+          </div>
+          <div className="privacy-warning">
+            <strong>Public blockchain warning</strong>
+            <p>The proof string submitted to Ethereum may be publicly visible and difficult to remove. Review the CID and checksum before continuing.</p>
+            <ul>
+              <li><b>SHA-256:</b> an integrity fingerprint, not encryption or proof of quality.</li>
+              <li><b>IPFS CID:</b> a content reference, not guaranteed storage, availability, or confidentiality.</li>
+              <li><b>Blockchain transaction:</b> a distinct step requiring MetaMask approval and gas.</li>
+            </ul>
+            <label className="privacy-confirmation">
+              <input type="checkbox" checked={privacyConfirmed}
+                onChange={(event) => setPrivacyConfirmed(event.target.checked)} />
+              I reviewed the proof and understand that this string will be stored on-chain.
+            </label>
           </div>
           <button className="create-button" type="submit"
-            disabled={!account || busy || !job || job.state !== 2n || job.freelancer.toLowerCase() !== account.toLowerCase()}>
-            Submit Work
+            disabled={!account || busy || uploadBusy || hashingFile || !privacyConfirmed || proofAnalysis.type === "invalid" || !eligibleWallet}>
+            Submit Work On-Chain
           </button>
         </fieldset>
       </form>
-      {job && job.state !== 2n && <p className="form-note">Work can only be submitted when the job is ACCEPTED.</p>}
+      {job && job.state !== 2n && <p className="form-note">Work can only be uploaded or submitted when the job is ACCEPTED.</p>}
       {job && account && job.freelancer.toLowerCase() !== account.toLowerCase()
-        && <p className="form-note">Select the assigned freelancer wallet in MetaMask to submit work.</p>}
-      <p className="form-note">Load the job first. Any non-empty proof string is supported. Submission requires MetaMask approval and local ETH for gas.</p>
+        && <p className="form-note">Select the assigned freelancer wallet in MetaMask to upload or submit work.</p>}
+      <p className="form-note">Manual proof remains supported. An upload never submits a transaction automatically; Step 2 still requires separate MetaMask approval.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="Submitting work sends no escrow value; only the network fee is charged." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}
