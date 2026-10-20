@@ -121,6 +121,11 @@
 .job-details-grid > div { min-width: 0; padding: 16px; border: 0; }
 .job-details-grid strong { display: block; overflow-wrap: anywhere; color: #e8e2d6; font-size: 0.82rem; font-weight: 450; line-height: 1.5; }
 .job-details-grid .proof-detail { grid-column: span 4; }
+.proof-detail .proof-value { white-space: pre-wrap; }
+.proof-detail small,
+.proof-detail em { display: block; margin-top: 7px; color: #8f8a80; font-size: 0.66rem; font-style: normal; line-height: 1.55; }
+.proof-detail a { display: inline-block; margin-top: 10px; color: #e0b969; font-size: 0.72rem; text-decoration: none; }
+.proof-detail a:hover { color: #ffe1a1; text-decoration: underline; }
 
 .lifecycle {
   margin-top: 18px;
@@ -179,6 +184,20 @@
 .time-strip > div { padding: 16px; border: 0; }
 .time-strip strong { display: block; color: #d9d3c8; font-size: 0.78rem; font-weight: 450; line-height: 1.5; }
 .time-strip em { display: block; margin-top: 8px; color: #dbac55; font-size: 0.68rem; font-style: normal; }
+
+.proof-verification {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.proof-verification small { color: #918b81; font-size: 0.65rem; line-height: 1.5; }
+.proof-verification > strong { color: #c8c0b3; font-size: 0.68rem; font-weight: 500; line-height: 1.5; }
+.proof-verification .verification-match { color: #b9d5a4; }
+.proof-verification .verification-mismatch,
+.proof-verification .verification-error { color: #efa994; }
 
 @media (max-width: 760px) {
   .dashboard-heading,

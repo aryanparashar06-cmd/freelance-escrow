@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 import "./AcceptJob.css";
 import "./ResolveDispute.css";
 
@@ -46,6 +48,7 @@ export default function ResolveDispute({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
   const revision = useRef(0);
   const pending = useRef(false);
 
@@ -60,6 +63,7 @@ export default function ResolveDispute({ account }) {
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -103,6 +107,7 @@ export default function ResolveDispute({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -131,6 +136,10 @@ export default function ResolveDispute({ account }) {
         if (current !== revision.current) return;
         // These UI checks help usability; Solidity remains the security authority.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.resolveDispute.estimateGas(id, decision));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
         const tx = await contract.resolveDispute(id, decision);
         if (current === revision.current) {
@@ -217,7 +226,8 @@ export default function ResolveDispute({ account }) {
       {job && job.state !== 4n && <p className="form-note">A dispute can only be resolved when the job is DISPUTED.</p>}
       {job && account && !isArbitrator(job, account)
         && <p className="form-note">Select the designated arbitrator wallet in MetaMask to resolve this dispute.</p>}
-      <p className="form-note">The contract sends escrow only to the recorded client or freelancer; no other recipient can be chosen. Resolution requires MetaMask approval and local ETH for gas.</p>
+      <p className="form-note">The contract sends escrow only to the recorded client or freelancer; no other recipient can be chosen. Resolution requires MetaMask approval and ETH for the connected network fee.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="The escrow transfer is separate from the arbitrator's network fee." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}

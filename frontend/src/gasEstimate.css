@@ -1,0 +1,49 @@
+.gas-estimate {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(220, 178, 101, 0.23);
+  border-radius: 8px;
+  background: rgba(220, 178, 101, 0.16);
+}
+
+.gas-estimate > div {
+  min-width: 0;
+  padding: 13px;
+  background: rgba(12, 12, 11, 0.93);
+}
+
+.gas-estimate span {
+  display: block;
+  margin-bottom: 6px;
+  color: #908b80;
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.gas-estimate strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #e9c98d;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.gas-estimate p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 11px 13px;
+  color: #aaa397;
+  background: rgba(8, 8, 8, 0.92);
+  font-size: 0.64rem;
+  line-height: 1.65;
+}
+
+@media (max-width: 640px) {
+  .gas-estimate { grid-template-columns: 1fr; }
+  .gas-estimate p { grid-column: auto; }
+}

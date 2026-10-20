@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
+import GasEstimate from "./gasEstimate";
+import { estimateGasCost } from "./gasCosts";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -37,6 +39,7 @@ export default function ApproveWork({ account }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [hash, setHash] = useState("");
+  const [gasEstimate, setGasEstimate] = useState(null);
   const revision = useRef(0);
   const pending = useRef(false);
 
@@ -50,6 +53,7 @@ export default function ApproveWork({ account }) {
       setError("");
       setStatus("");
       setHash("");
+      setGasEstimate(null);
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -93,6 +97,7 @@ export default function ApproveWork({ account }) {
     setError("");
     setStatus("");
     setHash("");
+    setGasEstimate(null);
     setJob(null);
     try {
       const id = parseJobId(jobId);
@@ -118,6 +123,10 @@ export default function ApproveWork({ account }) {
         if (current !== revision.current) return;
         // These UI checks help usability; Solidity remains the security authority.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
+        setStatus("Estimating gas with the connected network...");
+        const estimate = await estimateGasCost(provider, () => contract.approveWork.estimateGas(id));
+        if (current !== revision.current) return;
+        setGasEstimate(estimate);
         setStatus("Waiting for MetaMask confirmation...");
         const tx = await contract.approveWork(id);
         if (current === revision.current) {
@@ -188,7 +197,8 @@ export default function ApproveWork({ account }) {
       {job && job.state !== 3n && <p className="form-note">Work can only be approved when the job is SUBMITTED.</p>}
       {job && account && job.client.toLowerCase() !== account.toLowerCase()
         && <p className="form-note">Select the client wallet in MetaMask to approve work.</p>}
-      <p className="form-note">Approving releases the existing escrow payment to the freelancer. No additional escrow payment is sent; the client pays local ETH for gas. Review the proof before confirming in MetaMask.</p>
+      <p className="form-note">Approving releases the existing escrow payment to the freelancer. No additional escrow payment is sent; the client pays ETH for the connected network fee. Review the proof before confirming in MetaMask.</p>
+      <GasEstimate estimate={gasEstimate} valueNote="The escrow release is separate from the client's network fee." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}
       {status && <p className="transaction" role="status">{status}</p>}
       {hash && <p className="transaction transaction-hash">Transaction hash: {hash}</p>}
