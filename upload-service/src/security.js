@@ -4,6 +4,7 @@ import { ethers } from "ethers";
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 const JOB_ID = /^[1-9][0-9]*$/;
 const SAFE_MIME = /^[a-z0-9][a-z0-9!#$&^_.+\-/]{0,126}$/;
+const HIGH_RISK_EXTENSION = /\.(?:apk|app|bat|bin|cjs|cmd|com|dmg|dll|exe|hta|htm|html|img|iso|jar|js|jse|lnk|mjs|msi|ps1|scr|sh|svg|vbs|vbe|wsf|wsh)$/i;
 
 export class PublicError extends Error {
   constructor(status, message) {
@@ -23,6 +24,9 @@ export function validateUploadMetadata(input, config) {
 
   if (!name || name.length > 180 || /[\u0000-\u001f\u007f/\\]/.test(name)) {
     throw new PublicError(400, "File name is missing or contains unsafe characters.");
+  }
+  if (HIGH_RISK_EXTENSION.test(name)) {
+    throw new PublicError(400, "Executable and active-content file formats are not allowed.");
   }
   if (!Number.isSafeInteger(size) || size <= 0 || size > config.maxFileBytes) {
     throw new PublicError(400, `File size must be between 1 and ${config.maxFileBytes} bytes.`);
@@ -95,6 +99,42 @@ export class ChallengeStore {
     if (!item) throw new PublicError(401, "Upload challenge is missing, expired, or already used.");
     if (item.expiresAt <= this.now()) throw new PublicError(401, "Upload challenge has expired. Request a new one.");
     return item;
+  }
+
+  cleanup() {
+    const now = this.now();
+    for (const [key, item] of this.items) {
+      if (item.expiresAt <= now) this.items.delete(key);
+    }
+  }
+}
+
+export class UploadTokenStore {
+  constructor({ ttlSeconds, now = () => Date.now() }) {
+    this.ttlMs = ttlSeconds * 1000;
+    this.now = now;
+    this.items = new Map();
+  }
+
+  create(identity) {
+    this.cleanup();
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = ethers.sha256(ethers.toUtf8Bytes(token));
+    const expiresAt = this.now() + this.ttlMs;
+    this.items.set(tokenHash, { identity, expiresAt });
+    return { token, expiresAt: new Date(expiresAt).toISOString() };
+  }
+
+  consume(token) {
+    if (typeof token !== "string" || token.length < 32 || token.length > 128) {
+      throw new PublicError(401, "Upload authorization is missing or invalid.");
+    }
+    const tokenHash = ethers.sha256(ethers.toUtf8Bytes(token));
+    const item = this.items.get(tokenHash);
+    this.items.delete(tokenHash);
+    if (!item) throw new PublicError(401, "Upload authorization is missing, expired, or already used.");
+    if (item.expiresAt <= this.now()) throw new PublicError(401, "Upload authorization has expired. Authorize the upload again.");
+    return item.identity;
   }
 
   cleanup() {

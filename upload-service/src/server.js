@@ -33,7 +33,7 @@ function applyCors(request, response, config) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
     response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Upload-Token");
     response.setHeader("Access-Control-Max-Age", "600");
     return origin;
   }
@@ -50,7 +50,7 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
-export function createUploadServer({ config, authorizationService }) {
+export function createUploadServer({ config, authorizationService, secureUploadService }) {
   return createServer(async (request, response) => {
     try {
       const origin = applyCors(request, response, config);
@@ -76,6 +76,13 @@ export function createUploadServer({ config, authorizationService }) {
           ip: clientIp(request, config.trustProxy), origin,
         });
         sendJson(response, 200, result);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/v1/upload") {
+        const token = request.headers["x-upload-token"];
+        const identity = authorizationService.consumeUploadToken(Array.isArray(token) ? "" : token);
+        const result = await secureUploadService.process({ request, identity });
+        sendJson(response, 201, result);
         return;
       }
       throw new PublicError(404, "Endpoint not found.");

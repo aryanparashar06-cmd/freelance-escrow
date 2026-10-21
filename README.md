@@ -17,16 +17,18 @@ React + Vite frontend
         │                                  ▼
         │                    Hardhat Local or Ethereum Sepolia
         │
-        └── wallet-signed challenge ──► upload authorization service
-                                             │ server-only Pinata JWT
+        └── wallet-signed challenge ──► secure upload service
+                                             │ one-use upload token
                                              ▼
-                              short-lived restricted upload URL
+                                private temporary quarantine
                                              │
+                         signature check + SHA-256 + ClamAV scan
+                                             │ clean only
                                              ▼
-                                  direct browser upload to Pinata
+                              server-side Pinata/IPFS upload
 ```
 
-The small upload service has no application database or custody of file bytes. It verifies a one-time wallet-signed challenge, checks the configured contract and chain, and returns a short-lived Pinata upload URL only to the assigned freelancer of an `ACCEPTED` job. The browser then uploads directly to Pinata. The Pinata credential stays server-side. Contract storage remains the escrow source of truth; Solidity authorization remains authoritative.
+The upload service verifies a one-time wallet-signed challenge and the live contract state, then returns an expiring, single-use token for its own upload endpoint. File bytes are streamed into a private temporary quarantine, the server recomputes SHA-256, validates the detected content type, and sends the bytes to a private ClamAV daemon. Only a clean result permits a server-side Pinata upload. The temporary directory is deleted after success or any failure. The Pinata credential stays server-side, and Solidity remains authoritative for the later `submitWork` transaction.
 
 ## Technology stack
 
@@ -37,7 +39,7 @@ The small upload service has no application database or custody of file bytes. I
 - React 19 and Vite 8
 - Ethers.js 6.17 in the browser
 - MetaMask
-- Node.js upload authorization service using Pinata's v3 signed upload URLs
+- Node.js secure upload service, streaming multipart quarantine, ClamAV, and Pinata v3
 - CSS-based responsive cinematic interface
 
 ## Roles
@@ -94,10 +96,12 @@ The contract continues to store one backward-compatible `string workProof`. The 
 
 - A freelancer may select a supported file and calculate its SHA-256 digest with the browser Web Crypto API. Selection and hashing stay local; upload starts only after a separate button press and public-storage acknowledgement.
 - Browser hashing is limited to 50 MB because Web Crypto must read the complete file into memory. Larger files should be hashed independently and their digest pasted into the proof.
-- The upload service issues a random, expiring, single-use challenge bound to wallet, job, file name, type, size, checksum, contract, chain, and origin. MetaMask signs this message without creating a transaction. The server verifies the signature and then reads the live contract before asking Pinata for a 60-second URL restricted to that file's byte limit and MIME type.
+- The upload service issues a random, expiring, single-use challenge bound to wallet, job, file name, type, size, checksum, contract, chain, and origin. MetaMask signs this message without creating a transaction. The server verifies the signature and live contract before issuing a second, one-use backend upload token. It never returns a direct Pinata upload URL.
+- The backend streams the received bytes to a mode-restricted temporary directory, recomputes SHA-256, verifies the exact signed length and digest, checks the real file signature, rejects active/high-risk formats, and scans content using ClamAV `INSTREAM`. Encrypted archives, exceeded scan limits, scanner errors, and scanner timeouts fail closed.
+- Pinata publication begins only after the scanner returns clean. The response contains the validated CID, `ipfs://` URI, original digest, and `no-threats-detected` status. Quarantine files are removed after every outcome.
 - A successful upload returns a CID and `ipfs://` URI, but does not call `submitWork`. The freelancer explicitly inserts the URI plus checksum, reviews the proof, and confirms a separate blockchain transaction.
 - A SHA-256 digest is an integrity fingerprint. It can help compare bytes later, but it does not encrypt a file or prove quality, authorship, or originality.
-- The dashboard renders proof strings as text. Recognized IPFS references receive an optional, user-initiated link through the configured HTTPS gateway; nothing is loaded automatically. If the proof also contains a checksum, the reviewer can select a locally downloaded file and compare its SHA-256 bytes in the browser.
+- The dashboard renders proof strings as text. Recognized IPFS references receive an optional, user-initiated link through the configured HTTPS gateway; nothing is loaded automatically. If the proof also contains a checksum, the reviewer can select a locally downloaded file and compare its SHA-256 bytes in the browser. A matching digest proves byte integrity, not malware safety. Historical or manually submitted CIDs might never have passed this scanner and are never labelled scanned.
 - The user must acknowledge the public-record warning before submission. File bytes are not stored in browser storage or sent to the contract.
 
 Public IPFS files may be accessible to anyone who obtains their CID. Information submitted in a blockchain transaction may also be public and difficult to remove. Do not upload passwords, private keys, personal documents, confidential client information, or sensitive deliverables. This prototype does not encrypt files or provide private key sharing; confidential work needs a separately designed encryption and key-sharing system.
@@ -129,7 +133,7 @@ These mechanisms reduce specific risks but do not replace an independent securit
 
 ## Local setup
 
-Prerequisites: Node.js compatible with Hardhat 3 and Vite 8, npm, and MetaMask.
+Prerequisites: Node.js compatible with Hardhat 3 and Vite 8, npm, MetaMask, Docker Desktop with Compose, and at least 4 GiB available RAM for ClamAV.
 
 Install the contract and frontend dependencies:
 
@@ -146,11 +150,11 @@ Copy-Item .env.example .env
 
 The committed frontend defaults match Hardhat Local and the default deployment address used by this project. If a new deployment produces a different address, update `VITE_ESCROW_ADDRESS` in `frontend/.env.local` and restart Vite.
 
-Create a Pinata account and generate a JWT with the minimum file-write permission needed to create signed upload URLs. Put it only in `upload-service/.env` as `PINATA_JWT`; never place it in a `VITE_*` variable. Confirm `RPC_URL`, `CHAIN_ID`, and `ESCROW_ADDRESS` match the same deployed contract used by the frontend.
+Create a Pinata account and generate a JWT with only the file-write permission needed by the backend. Put it only in `upload-service/.env` as `PINATA_JWT`; never place it in a `VITE_*` variable. Confirm `RPC_URL`, `CHAIN_ID`, and `ESCROW_ADDRESS` match the same deployed contract used by the frontend. When the backend runs in Docker Desktop and Hardhat runs on the host, set `RPC_URL=http://host.docker.internal:8545`.
 
-### Five-terminal development workflow
+### Local development workflow
 
-Open five terminals at the repository root.
+Open four terminals at the repository root. Docker Compose runs the Node upload service and ClamAV together; the scanner is reachable only on their private Compose network.
 
 **Terminal 1 — local blockchain**
 
@@ -166,21 +170,24 @@ npx hardhat run scripts/deploy.ts --network localhost
 
 Copy the printed `FreelanceEscrow address` into `frontend/.env.local` when it differs from the configured address.
 
-**Terminal 3 — frontend**
+**Terminal 3 — secure upload backend and scanner**
+
+```powershell
+Copy-Item upload-service\.env.example upload-service\.env
+# Edit upload-service\.env and set PINATA_JWT, RPC_URL and ESCROW_ADDRESS.
+docker compose up --build
+```
+
+Wait until `clamav` is healthy. The first start can take several minutes while signature databases initialize. Compose allocates a 4 GiB memory ceiling to ClamAV, persists its signature database, uses a private scanner network, and places quarantine in a 64 MiB temporary filesystem.
+
+**Terminal 4 — frontend**
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-**Terminal 4 — upload authorization service**
-
-```powershell
-cd upload-service
-npm start
-```
-
-**Terminal 5 — contract, frontend, and backend checks**
+Run checks in additional terminals as needed:
 
 ```powershell
 npx hardhat test
@@ -220,18 +227,47 @@ VITE_UPLOAD_SERVICE_URL=http://127.0.0.1:8787
 VITE_IPFS_GATEWAY_URL=https://ipfs.io/ipfs/
 ```
 
-All `VITE_*` values are public and embedded in the browser bundle. `VITE_UPLOAD_SERVICE_URL` points to the separately hosted authorization API, and `VITE_IPFS_GATEWAY_URL` must be an HTTPS gateway base ending in `/ipfs/`. Never put a Pinata JWT, wallet private key, seed phrase, RPC secret, or other credential in a Vite environment variable.
+All `VITE_*` values are public and embedded in the browser bundle. `VITE_UPLOAD_SERVICE_URL` points to the separately hosted secure upload API, and `VITE_IPFS_GATEWAY_URL` must be an HTTPS gateway base ending in `/ipfs/`. Never put a Pinata JWT, wallet private key, seed phrase, RPC secret, or other credential in a Vite environment variable.
 
 ## Upload service configuration
 
 Copy `upload-service/.env.example` to `upload-service/.env`. Its values are server-side:
 
-- `PINATA_JWT` is secret. Generate it in Pinata's API Keys page with the narrow file-write permission required for signed upload URLs.
+- `PINATA_JWT` is secret. Generate it in Pinata's API Keys page with only the file-write permission needed by the server-side upload.
 - `RPC_URL`, `CHAIN_ID`, and `ESCROW_ADDRESS` identify the exact chain and contract whose jobs authorize uploads. The RPC may itself contain a secret in a hosted deployment.
 - `ALLOWED_ORIGINS` is a comma-separated exact allowlist for the Vite development origin and deployed frontend origin. Keep `HOST=127.0.0.1` locally; use the host binding required by the deployment platform, commonly `0.0.0.0`, when hosted. Enable `TRUST_PROXY` only behind a trusted reverse proxy that overwrites `X-Forwarded-For`.
-- upload size, MIME allowlist, provider timeout, challenge lifetime, signed-URL lifetime, and rate limits are configurable. The frontend and service default to 50 MB.
+- `UPLOAD_TOKEN_TTL_SECONDS` limits the lifetime of the one-use backend upload token. `QUARANTINE_DIR` must be private and capacity-limited. `CLAMAV_HOST`, `CLAMAV_PORT`, and `CLAMAV_SCAN_TIMEOUT_MS` configure the scanner; never expose ClamAV's unauthenticated TCP port publicly.
+- Upload size, MIME allowlist, provider and scanner timeouts, challenge lifetime, and rate limits are configurable. The frontend and service default to 50 MB. Keep `StreamMaxLength` and the quarantine capacity at least as large as that limit.
 
-The service keeps challenges and rate-limit counters in memory. This is suitable for one inexpensive student-demo instance. A multi-instance production deployment needs a shared TTL store such as Redis/KV so replay protection and rate limiting remain consistent across instances. The authorization endpoint should be deployed to a small Node-compatible HTTPS service, while GitHub Pages continues to host only the static frontend. Configure the hosted frontend origin in `ALLOWED_ORIGINS`; do not put the backend `.env` into the Pages build.
+The service keeps challenges, upload tokens, and rate-limit counters in memory. This is suitable for one instance. A multi-instance deployment needs a shared atomic TTL store such as Redis/KV so replay prevention, token consumption, and rate limiting remain consistent. The public Node service needs HTTPS, a capacity-limited ephemeral quarantine volume, and outbound Pinata/RPC access. ClamAV must run as a separate private service with current FreshClam signatures, at least 3 GiB RAM (4 GiB preferred), bounded concurrency, and no public port.
+
+Operational references: [ClamAV INSTREAM protocol](https://docs.clamav.net/manual/Usage/ClamdProtocol.html), [official ClamAV Docker guidance](https://docs.clamav.net/manual/Installing/Docker.html), and [ClamAV scanning guidance](https://docs.clamav.net/manual/Usage/Scanning.html).
+
+### Clean PDF and EICAR checks
+
+For a clean-path manual test, create and accept a job, choose a small ordinary PDF in Submit Work, review the calculated SHA-256, acknowledge public storage, and press **Scan & Upload to IPFS**. The UI should show backend upload, scan, and CID stages. The on-chain transaction remains a separate explicit action.
+
+For the harmless standard EICAR antivirus test, create `eicar.com.txt` only in an isolated development directory, select it through the same accepted job, and verify that the backend returns **Upload rejected: malware was detected by the scanner** and no CID. Delete the test file afterward.
+
+```powershell
+Set-Content -Path .\eicar.com.txt -Encoding ascii -NoNewline `
+  -Value 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+```
+
+To exercise the automated real-engine test against the Compose scanner:
+
+```powershell
+docker compose run --rm -e RUN_CLAMAV_INTEGRATION=true `
+  -v "${PWD}/upload-service/test:/app/test:ro" upload-service npm test
+```
+
+The real-engine test is opt-in so ordinary unit tests do not pretend that ClamAV ran. Use only EICAR, never actual malware.
+
+### Render deployment feasibility
+
+Render can host this architecture, but it should use two paid services in the same region: a public Docker web service for Node and a Docker private service for ClamAV. Configure `CLAMAV_HOST` with the scanner's internal hostname, give the scanner a 4 GiB compute plan, and attach a persistent disk for `/var/lib/clamav` if signature databases must survive redeploys. Keep quarantine ephemeral and capacity-limited on the Node service. A 512 MB free instance is not enough for ClamAV and must not be used as a reason to skip scanning. Monitor memory, scanner health, signature freshness, latency, quarantine usage, and Pinata failures before public use.
+
+See Render's [private service](https://render.com/docs/private-services), [private network](https://render.com/docs/private-network), [compute plan](https://render.com/docs/compute-plans), and [persistent disk](https://render.com/docs/disks) documentation before provisioning.
 
 ## Sepolia readiness
 
@@ -259,7 +295,7 @@ cd frontend
 npm run build
 ```
 
-Publish the generated `frontend/dist` directory with a reviewed GitHub Pages workflow or Pages deployment method. This repository does not auto-publish during the engineering pass. GitHub Pages serves only static files, so it cannot safely hold `PINATA_JWT` or run the authorization service. The separately hosted HTTPS backend and frontend must use the same public chain and deployed contract.
+Publish the generated `frontend/dist` directory with a reviewed GitHub Pages workflow or Pages deployment method. This repository does not auto-publish during the engineering pass. GitHub Pages serves only static files, so it cannot safely hold `PINATA_JWT` or run the secure upload service. The separately hosted HTTPS backend and frontend must use the same public chain and deployed contract.
 
 Pinata plans have finite storage, file-count, bandwidth, and request quotas. At the time of this pass, Pinata advertises a free tier with 1 GB total storage, 500 files, 10 GB monthly bandwidth, and 10,000 monthly requests; confirm current limits and pricing before a demo or deployment. Pinning is a provider service and does not guarantee permanent availability.
 
@@ -292,9 +328,11 @@ Contract tests verify Solidity behavior. Manual MetaMask testing is still requir
 - There is no indexing service, search, pagination, notification system, or backend history view.
 - Contract and frontend upgrades require a new deployment/build; there is no proxy upgrade system.
 - Public-testnet operation depends on RPC availability and test ETH.
-- Public IPFS provides no confidentiality. The server never receives file bytes, so the signed challenge binds the browser-declared SHA-256 metadata but cannot independently recompute it.
-- Browser MIME metadata can be spoofed. Pinata and the authorization service enforce the declared type and byte limit, but high-risk production use would need server-side content inspection or a dedicated malware-scanning pipeline.
-- One signed Pinata URL is very short-lived and narrowly restricted, but provider-side URLs are not treated as a durable application session. In-memory challenge and rate-limit state does not coordinate across multiple server instances.
+- Public IPFS provides no confidentiality. The server temporarily receives file bytes in private quarantine, but a passing file is then published publicly. Do not upload secrets or confidential deliverables.
+- Content signatures and ClamAV reduce risk but cannot guarantee a file is malware-free. Scanner signatures must stay current, new or targeted malware can be missed, and downloaded files still require cautious handling.
+- Encrypted archives, active-content markers, unsupported signatures, and scanner limit alerts are rejected. This intentionally excludes some legitimate files; do not weaken the policy silently.
+- The smart contract still accepts arbitrary proof strings and historical/manual CIDs. The application's scanned upload path cannot make those external references trustworthy.
+- In-memory challenge, upload-token, and rate-limit state does not coordinate across multiple server instances.
 - Gateway and Pinata availability, account quota, retention, and pin management remain external dependencies.
 
 ## Future work

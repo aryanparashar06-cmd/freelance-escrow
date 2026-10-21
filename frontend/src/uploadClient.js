@@ -16,14 +16,20 @@ export const ALLOWED_UPLOAD_MIME_TYPES = new Set([
   "text/plain",
   "text/csv",
   "application/json",
-  "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/octet-stream",
 ]);
+
+export const SECURE_UPLOAD_STAGES = [
+  { id: "selected", label: "File selected" },
+  { id: "hashed", label: "SHA-256 calculated" },
+  { id: "uploading", label: "Uploading to secure backend" },
+  { id: "scanning", label: "Security scan in progress" },
+  { id: "scan-passed", label: "No threats detected by scanner" },
+  { id: "publishing", label: "Uploading scanned file to IPFS" },
+  { id: "complete", label: "Upload successful, CID generated" },
+];
 
 export function validateDeliverableFile(file) {
   if (!file) throw new Error("Choose a deliverable file first.");
@@ -58,7 +64,7 @@ async function postJson(path, body, { fetchImpl = fetch, signal } = {}) {
     });
   } catch (error) {
     if (error.name === "AbortError") throw new Error("Upload authorization was cancelled.", { cause: error });
-    throw new Error("Cannot reach the upload authorization service. Check its URL and server status.", { cause: error });
+    throw new Error("Cannot reach the secure upload service. Check its URL and server status.", { cause: error });
   }
   return readResponse(response);
 }
@@ -89,17 +95,23 @@ export async function requestUploadAuthorization({ provider, account, jobId, fil
   }, { fetchImpl, signal });
 }
 
-export function uploadFileToIpfs({ uploadUrl, file, signal, onProgress, xhrFactory = () => new XMLHttpRequest() }) {
-  if (typeof uploadUrl !== "string" || !uploadUrl.startsWith("https://uploads.pinata.cloud/")) {
-    return Promise.reject(new Error("The upload service did not return a trusted Pinata upload URL."));
+export function uploadFileSecurely({ uploadToken, file, signal, onProgress, onStage, xhrFactory = () => new XMLHttpRequest() }) {
+  if (typeof uploadToken !== "string" || uploadToken.length < 32) {
+    return Promise.reject(new Error("The upload service did not return a valid one-time upload authorization."));
   }
   return new Promise((resolve, reject) => {
     const request = xhrFactory();
     const abort = () => request.abort();
     const cleanup = () => signal?.removeEventListener("abort", abort);
-    request.open("POST", uploadUrl);
+    request.open("POST", `${UPLOAD_SERVICE_URL}/v1/upload`);
+    request.setRequestHeader("X-Upload-Token", uploadToken);
+    onStage?.("uploading");
     request.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+      if (event.lengthComputable) {
+        const progress = Math.round((event.loaded / event.total) * 100);
+        onProgress?.(progress);
+        if (progress === 100) onStage?.("scanning");
+      }
     });
     request.addEventListener("load", () => {
       cleanup();
@@ -107,25 +119,30 @@ export function uploadFileToIpfs({ uploadUrl, file, signal, onProgress, xhrFacto
       try {
         payload = JSON.parse(request.responseText);
       } catch {
-        reject(new Error("The IPFS provider returned an unreadable response."));
+        reject(new Error("The secure upload service returned an unreadable response."));
         return;
       }
       if (request.status < 200 || request.status >= 300) {
-        reject(new Error(payload?.error?.message || payload?.error || `IPFS upload failed (${request.status}).`));
+        reject(new Error(payload?.error || `Secure upload failed (${request.status}).`));
         return;
       }
-      const cid = payload?.data?.cid;
+      const cid = payload?.cid;
       const parsed = typeof cid === "string" ? parseIpfsReference(cid) : null;
       if (!parsed?.isIpfs || parsed.error) {
-        reject(new Error("The IPFS provider response did not contain a valid CID."));
+        reject(new Error("The secure upload response did not contain a valid CID."));
+        return;
+      }
+      if (payload.scanStatus !== "no-threats-detected") {
+        reject(new Error("The secure upload service did not confirm a completed malware scan."));
         return;
       }
       onProgress?.(100);
-      resolve({ cid, uri: `ipfs://${cid}`, providerFileId: payload.data.id || "" });
+      onStage?.("complete");
+      resolve({ cid, uri: `ipfs://${cid}`, providerFileId: payload.providerFileId || "", scanStatus: payload.scanStatus });
     });
     request.addEventListener("error", () => {
       cleanup();
-      reject(new Error("The file upload failed because of a network or provider error."));
+      reject(new Error("The secure file upload failed because of a network error."));
     });
     request.addEventListener("abort", () => {
       cleanup();
@@ -138,7 +155,6 @@ export function uploadFileToIpfs({ uploadUrl, file, signal, onProgress, xhrFacto
     }
     const form = new FormData();
     form.append("file", file);
-    form.append("network", "public");
     request.send(form);
   });
 }

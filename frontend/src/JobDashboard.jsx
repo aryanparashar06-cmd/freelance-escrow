@@ -212,7 +212,7 @@ function JobDashboard({ account }) {
                 </a>
               )}
               {proofAnalysis.type === "ipfs" && (
-                <em>The external gateway is contacted only when you click. A CID identifies content but does not prove quality, correctness, availability, or confidentiality.</em>
+                <em>The external gateway is contacted only when you click. Treat every download as untrusted: a CID identifies content but does not prove malware safety, quality, correctness, availability, or confidentiality. Historical and manually submitted IPFS references may never have passed this application's scanner.</em>
               )}
               {proofAnalysis.type === "ipfs" && proofAnalysis.checksum && (
                 <div className="proof-verification">
@@ -221,6 +221,7 @@ function JobDashboard({ account }) {
                     <input type="file" onChange={verifyDownloadedFile} />
                   </label>
                   <small>Comparison happens locally against the SHA-256 checksum stored in the proof.</small>
+                  <small>A matching checksum verifies byte integrity only. It does not establish that the file is safe.</small>
                   {verification && <strong className={`verification-${verification.status}`} role="status">{verification.message}</strong>}
                 </div>
               )}

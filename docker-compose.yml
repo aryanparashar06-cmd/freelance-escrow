@@ -1,0 +1,58 @@
+services:
+  upload-service:
+    build:
+      context: ./upload-service
+    env_file:
+      - ./upload-service/.env
+    environment:
+      HOST: 0.0.0.0
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      QUARANTINE_DIR: /var/quarantine
+    ports:
+      - "127.0.0.1:8787:8787"
+    depends_on:
+      clamav:
+        condition: service_healthy
+    networks:
+      - outbound
+      - scanner-private
+    read_only: true
+    tmpfs:
+      - /var/quarantine:size=64m,uid=1000,gid=1000,mode=0700
+      - /tmp:size=32m,uid=1000,gid=1000,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 128
+    restart: unless-stopped
+
+  clamav:
+    image: clamav/clamav:1.4
+    volumes:
+      - clamav-signatures:/var/lib/clamav
+      - ./upload-service/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+    expose:
+      - "3310"
+    networks:
+      - scanner-private
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping=1"]
+      interval: 30s
+      timeout: 10s
+      retries: 12
+      start_period: 180s
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 256
+    restart: unless-stopped
+
+networks:
+  outbound:
+  scanner-private:
+    internal: true
+
+volumes:
+  clamav-signatures:

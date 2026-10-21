@@ -2,11 +2,11 @@ import { ethers } from "ethers";
 import {
   ChallengeStore,
   PublicError,
+  UploadTokenStore,
   createRateLimiter,
   sameUploadIdentity,
   validateUploadIdentity,
 } from "./security.js";
-import { createPinataSignedUploadUrl } from "./pinata.js";
 
 const JOBS_ABI = [
   "function jobs(uint256) view returns (address client, address freelancer, address arbitrator, uint256 amount, string title, uint256 deadline, uint256 createdAt, uint256 submittedAt, string workProof, uint8 state)",
@@ -16,7 +16,7 @@ export function createAuthorizationService({
   config,
   provider = new ethers.JsonRpcProvider(config.rpcUrl),
   challengeStore = new ChallengeStore({ ttlSeconds: config.challengeTtlSeconds }),
-  pinataSigner = createPinataSignedUploadUrl,
+  uploadTokenStore = new UploadTokenStore({ ttlSeconds: config.uploadTokenTtlSeconds }),
   chainVerifier,
 }) {
   const ipLimiter = createRateLimiter({ limit: config.rateLimitPerIp, windowMs: config.rateLimitWindowMs });
@@ -82,13 +82,17 @@ export function createAuthorizationService({
       throw new PublicError(409, "The job deadline has passed.");
     }
 
-    const uploadUrl = await pinataSigner({ config, identity });
+    const issued = uploadTokenStore.create(identity);
     return {
-      uploadUrl,
-      expiresInSeconds: config.signedUploadTtlSeconds,
+      uploadToken: issued.token,
+      expiresAt: issued.expiresAt,
       restrictions: { maxFileBytes: identity.file.size, mimeType: identity.file.type },
     };
   }
 
-  return { createChallenge, authorize };
+  function consumeUploadToken(token) {
+    return uploadTokenStore.consume(token);
+  }
+
+  return { createChallenge, authorize, consumeUploadToken };
 }

@@ -8,6 +8,9 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "ethers": "^6.17.0"
+    "busboy": "^1.6.0",
+    "ethers": "^6.17.0",
+    "file-type": "^22.2.0",
+    "multiformats": "^14.0.5"
   }
 }

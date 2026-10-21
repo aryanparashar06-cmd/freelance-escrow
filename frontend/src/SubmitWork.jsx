@@ -12,8 +12,9 @@ import {
 } from "./workProof";
 import {
   requestUploadAuthorization,
+  SECURE_UPLOAD_STAGES,
   submitWorkProofTransaction,
-  uploadFileToIpfs,
+  uploadFileSecurely,
   validateDeliverableFile,
 } from "./uploadClient";
 import "./AcceptJob.css";
@@ -30,6 +31,9 @@ function errorMessage(err) {
   if (reason?.includes("Job is not accepted")) return "Work can only be submitted when the job is ACCEPTED.";
   if (reason?.includes("Job does not exist")) return "Job does not exist. Check the Job ID.";
   if (reason?.includes("Deadline has passed")) return "The job deadline has passed. Work can no longer be submitted.";
+  if (/file signature|active or executable|valid UTF-8|valid JSON|unsupported binary/i.test(reason || "")) {
+    return `Upload rejected: malicious or unsupported file. ${reason}`;
+  }
   return reason || "Unable to complete the request. Check MetaMask and the local node.";
 }
 
@@ -67,6 +71,7 @@ export default function SubmitWork({ account }) {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadStage, setUploadStage] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [uploadedFile, setUploadedFile] = useState(null);
   const revision = useRef(0);
@@ -89,6 +94,7 @@ export default function SubmitWork({ account }) {
       setUploadStatus("");
       setUploadError("");
       setUploadProgress(0);
+      setUploadStage("");
     }
     wallet?.on("accountsChanged", clearDetails);
     wallet?.on("chainChanged", clearDetails);
@@ -116,6 +122,7 @@ export default function SubmitWork({ account }) {
     setUploadStatus("");
     setUploadError("");
     setUploadProgress(0);
+    setUploadStage("selected");
     setPublicUploadConfirmed(false);
     setHashingFile(true);
     try {
@@ -124,6 +131,7 @@ export default function SubmitWork({ account }) {
       if (current !== fileRevision.current) return;
       setSelectedFile(file);
       setFileDigest(digest);
+      setUploadStage("hashed");
     } catch (err) {
       if (current === fileRevision.current) setFileHashError(err.message || "The selected file could not be prepared.");
     } finally {
@@ -186,6 +194,7 @@ export default function SubmitWork({ account }) {
     setUploadError("");
     setUploadStatus("");
     setUploadProgress(0);
+    setUploadStage("hashed");
     const controller = new AbortController();
     uploadController.current = controller;
     try {
@@ -209,15 +218,21 @@ export default function SubmitWork({ account }) {
         sha256: fileDigest,
         signal: controller.signal,
       });
-      setUploadStatus("Wallet authorized. Uploading file directly to public IPFS through Pinata...");
-      const result = await uploadFileToIpfs({
-        uploadUrl: authorization.uploadUrl,
+      setUploadStatus("Uploading to the secure backend. The file stays private until validation and scanning pass.");
+      const result = await uploadFileSecurely({
+        uploadToken: authorization.uploadToken,
         file: selectedFile,
         signal: controller.signal,
         onProgress: setUploadProgress,
+        onStage: (stage) => {
+          setUploadStage(stage);
+          if (stage === "scanning") {
+            setUploadStatus("Security scan and server-side publication are in progress. Upload remains blocked unless scanning succeeds.");
+          }
+        },
       });
       setUploadedFile(result);
-      setUploadStatus("File uploaded to IPFS. Review the CID, then explicitly insert and submit the proof on-chain.");
+      setUploadStatus("No threats detected by scanner. File uploaded to IPFS; review the CID before submitting proof on-chain.");
     } catch (err) {
       setUploadStatus("");
       setUploadError(errorMessage(err));
@@ -329,6 +344,7 @@ export default function SubmitWork({ account }) {
                 setUploadedFile(null);
                 setUploadStatus("");
                 setUploadError("");
+                setUploadStage("");
               }} />
           </div>
           <button className="create-button" type="submit" disabled={!account || busy || uploadBusy}>Load Job</button>
@@ -352,14 +368,14 @@ export default function SubmitWork({ account }) {
         <div className="file-hash-heading">
           <div>
             <span className="proof-kicker">STEP 1 · OPTIONAL OFF-CHAIN FILE</span>
-            <strong>Upload deliverable to public IPFS</strong>
+            <strong>Scan and upload deliverable to public IPFS</strong>
           </div>
           <label className={hashingFile || uploadBusy ? "file-picker disabled" : "file-picker"}>
             {hashingFile ? "Hashing file..." : "Choose file"}
             <input type="file" onChange={handleFileSelection} disabled={hashingFile || uploadBusy || busy} />
           </label>
         </div>
-        <p>Choosing a file calculates its SHA-256 checksum locally. Nothing is uploaded until you press Upload to IPFS. The limit is {formatFileSize(MAX_HASH_FILE_BYTES)}.</p>
+        <p>Choosing a file calculates its SHA-256 checksum locally. Upload sends the bytes to a private backend quarantine, recomputes the checksum, validates the file signature, scans it, and publishes only a passing file. The limit is {formatFileSize(MAX_HASH_FILE_BYTES)}.</p>
         {fileName && (
           <div className="file-hash-result" aria-live="polite">
             <span>Selected file</span>
@@ -379,6 +395,16 @@ export default function SubmitWork({ account }) {
         )}
         {fileHashError && <p className="inline-error" role="alert">{fileHashError}</p>}
 
+        {uploadStage && (
+          <ol className="secure-upload-stages" aria-label="Secure upload stages">
+            {SECURE_UPLOAD_STAGES.map((stage, index) => {
+              const currentIndex = SECURE_UPLOAD_STAGES.findIndex((item) => item.id === uploadStage);
+              const stageState = index < currentIndex ? "complete" : index === currentIndex ? "current" : "pending";
+              return <li className={stageState} key={stage.id}><span aria-hidden="true">{stageState === "complete" ? "✓" : "◇"}</span>{stage.label}</li>;
+            })}
+          </ol>
+        )}
+
         <div className="privacy-warning upload-privacy-warning">
           <strong>Public IPFS privacy warning</strong>
           <p>Files uploaded to public IPFS may be accessible to anyone who obtains their CID. Do not upload passwords, private keys, confidential client information, personal documents or other sensitive deliverables.</p>
@@ -392,7 +418,7 @@ export default function SubmitWork({ account }) {
         <div className="upload-actions">
           <button className="create-button" type="button" onClick={() => void handleUpload()}
             disabled={!eligibleWallet || !selectedFile || !fileDigest || hashingFile || busy || uploadBusy || !publicUploadConfirmed || Boolean(uploadedFile)}>
-            {uploadBusy ? "Uploading..." : uploadedFile ? "Uploaded to IPFS" : "Upload to IPFS"} <span aria-hidden="true">↗</span>
+            {uploadBusy ? "Scanning & Uploading..." : uploadedFile ? "Scanned & Uploaded" : "Scan & Upload to IPFS"} <span aria-hidden="true">↗</span>
           </button>
           {uploadBusy && (
             <button className="secondary-action" type="button" onClick={() => uploadController.current?.abort()}>
@@ -413,12 +439,14 @@ export default function SubmitWork({ account }) {
             <code>{uploadedFile.cid}</code>
             <span>IPFS URI</span>
             <code>{uploadedFile.uri}</code>
+            <span>Security scan</span>
+            <strong>No threats detected by scanner</strong>
             <div className="proof-tool-actions">
               <button type="button" onClick={() => void copyText(uploadedFile.cid, "cid")}>{copied === "cid" ? "CID copied" : "Copy CID"}</button>
               <button type="button" onClick={() => void copyText(uploadedFile.uri, "uri")}>{copied === "uri" ? "URI copied" : "Copy URI"}</button>
               <button type="button" onClick={insertUploadedProof}>Insert URI + checksum into proof</button>
             </div>
-            <em>Upload succeeded off-chain. No blockchain transaction has been sent yet, and pinning does not guarantee permanent availability.</em>
+            <em>Upload succeeded off-chain. Scanner detection is not a guarantee of safety. No blockchain transaction has been sent yet, and pinning does not guarantee permanent availability.</em>
           </div>
         )}
       </div>
