@@ -1,5 +1,5 @@
-import { open, createReadStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { open, readFile } from "node:fs/promises";
 import { fileTypeFromFile } from "file-type";
 import { PublicError } from "./security.js";
 
@@ -7,7 +7,8 @@ const BINARY_MIME_EQUIVALENTS = new Map([
   ["application/x-zip-compressed", new Set(["application/zip"])],
 ]);
 const TEXT_TYPES = new Set(["text/plain", "text/csv", "application/json"]);
-const ACTIVE_MARKERS = /(?:^|[\r\n])#!|<\s*(?:script|html|iframe|object|embed)\b|javascript\s*:|\/JavaScript\b|\/JS\b|\/Launch\b|\/OpenAction\b|\/EmbeddedFile\b/i;
+const TEXT_ACTIVE_MARKERS = /(?:^|[\r\n])#!|<\s*(?:script|html|iframe|object|embed)\b|javascript\s*:/i;
+const PDF_ACTIVE_MARKERS = /\/(?:JavaScript|JS|Launch|OpenAction|EmbeddedFile)\b/i;
 
 function mimeMatches(declared, detected) {
   return declared === detected || BINARY_MIME_EQUIVALENTS.get(declared)?.has(detected);
@@ -24,11 +25,11 @@ async function readPrefix(filePath, maximum = 64 * 1024) {
   }
 }
 
-async function containsActiveContent(filePath) {
+async function containsPattern(filePath, pattern) {
   let carry = "";
   for await (const chunk of createReadStream(filePath, { highWaterMark: 64 * 1024 })) {
     const text = carry + chunk.toString("latin1");
-    if (ACTIVE_MARKERS.test(text)) return true;
+    if (pattern.test(text)) return true;
     carry = text.slice(-64);
   }
   return false;
@@ -62,7 +63,10 @@ export async function validateFileContent({ filePath, identity }) {
     throw new PublicError(415, "The file signature does not match the authorized MIME type.");
   }
 
-  if (await containsActiveContent(filePath)) {
+  const activePattern = TEXT_TYPES.has(identity.file.type)
+    ? TEXT_ACTIVE_MARKERS
+    : detected?.mime === "application/pdf" ? PDF_ACTIVE_MARKERS : null;
+  if (activePattern && await containsPattern(filePath, activePattern)) {
     throw new PublicError(415, "Active or executable content is not allowed in deliverable uploads.");
   }
   return { detectedMime: detected?.mime || identity.file.type };

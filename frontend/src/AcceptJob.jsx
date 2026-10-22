@@ -3,6 +3,7 @@ import { ethers } from "ethers";
 import { LOCAL_CHAIN_ID, WRONG_NETWORK_MESSAGE, ESCROW_ADDRESS, ESCROW_ABI } from "./escrow";
 import GasEstimate from "./gasEstimate";
 import { estimateGasCost } from "./gasCosts";
+import { getAcceptJobEligibility } from "./jobValidation";
 import "./AcceptJob.css";
 
 const STATES = ["NONE", "FUNDED", "ACCEPTED", "SUBMITTED", "DISPUTED", "RELEASED", "REFUNDED"];
@@ -80,13 +81,15 @@ export default function AcceptJob({ account }) {
     return provider;
   }
 
-  async function readJob(provider, id) {
+  async function readJob(provider, id, blockTag = "latest") {
     const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, provider);
-    const result = await contract.jobs(id);
+    const block = await provider.getBlock(blockTag);
+    if (!block) throw new Error("Unable to read the blockchain time. Check the local node and load again.");
+    const result = await contract.jobs(id, { blockTag: block.number });
     if (result.state === 0n) throw new Error("Job does not exist");
     return { id: id.toString(), client: result.client, freelancer: result.freelancer,
       arbitrator: result.arbitrator, title: result.title, amount: result.amount,
-      deadline: result.deadline, state: result.state };
+      deadline: result.deadline, blockchainTime: BigInt(block.timestamp), state: result.state };
   }
 
   async function runAction(accept) {
@@ -103,13 +106,23 @@ export default function AcceptJob({ account }) {
       const id = parseJobId(jobId);
       const provider = await getProvider();
       if (current !== revision.current) return;
+      let confirmedBlock = "latest";
       if (accept) {
+        const details = await readJob(provider, id);
+        if (current !== revision.current) return;
+        setJob(details);
+        const eligibility = getAcceptJobEligibility(details, account);
+        if (!eligibility.eligible) throw new Error(eligibility.reason);
         const signer = await provider.getSigner(account);
         if (BigInt(await provider.send("eth_chainId", [])) !== LOCAL_CHAIN_ID) {
           throw new Error(WRONG_NETWORK_MESSAGE);
         }
         if (current !== revision.current) return;
-        // Authorization and job-state checks belong to the Solidity contract.
+        if ((await signer.getAddress()).toLowerCase() !== details.freelancer.toLowerCase()) {
+          throw new Error("Select the assigned freelancer wallet in MetaMask.");
+        }
+        if (current !== revision.current) return;
+        // UI checks aid usability; the Solidity contract remains authoritative.
         const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
         setStatus("Estimating gas with the connected network...");
         const estimate = await estimateGasCost(provider, () => contract.acceptJob.estimateGas(id));
@@ -124,11 +137,12 @@ export default function AcceptJob({ account }) {
         const receipt = await tx.wait();
         if (!receipt || receipt.status !== 1) throw new Error("Transaction was not confirmed successfully.");
         if (current !== revision.current) return;
+        confirmedBlock = receipt.blockNumber;
         setStatus(`Transaction confirmed. Job ${id} accepted successfully.`);
       }
       // Keep transaction success separate from a failed details refresh.
       try {
-        const details = await readJob(provider, id);
+        const details = await readJob(provider, id, confirmedBlock);
         if (current === revision.current) setJob(details);
       } catch (err) {
         if (current === revision.current) setError(`${accept ? "Accepted, but details could not be refreshed: " : ""}${errorMessage(err)}`);
@@ -143,6 +157,8 @@ export default function AcceptJob({ account }) {
       setBusy(false);
     }
   }
+
+  const acceptance = getAcceptJobEligibility(job, account);
 
   return (
     <section className="form-panel accept-job-panel" aria-labelledby="accept-job-heading">
@@ -174,8 +190,9 @@ export default function AcceptJob({ account }) {
           <div><dt>Current state</dt><dd>{STATES[Number(job.state)] ?? "UNKNOWN"}</dd></div>
         </dl>
       )}
-      <button className="create-button accept-job-button" type="button" disabled={!account || busy || !job}
+      <button className="create-button accept-job-button" type="button" disabled={!account || busy || !acceptance.eligible}
         onClick={() => void runAction(true)}>Accept Job</button>
+      {job && !acceptance.eligible && <p className="form-note">{acceptance.reason}</p>}
       <p className="form-note">Load the job first. Accepting requires MetaMask approval and ETH for the connected network fee; no escrow payment is sent.</p>
       <GasEstimate estimate={gasEstimate} valueNote="Accepting a job sends no escrow value; only the network fee is charged." />
       {busy && !status && <p className="transaction" role="status">Loading...</p>}

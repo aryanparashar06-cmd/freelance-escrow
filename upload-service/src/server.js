@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { PublicError } from "./security.js";
 
@@ -50,7 +51,36 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
-export function createUploadServer({ config, authorizationService, secureUploadService }) {
+function safeDiagnosticValue(value, fallback) {
+  const normalized = typeof value === "string" ? value : "";
+  return /^[A-Za-z0-9_.-]{1,64}$/.test(normalized) ? normalized : fallback;
+}
+
+function requestPath(request) {
+  try {
+    return new URL(request.url || "/", "http://upload-service.local").pathname;
+  } catch {
+    return "/";
+  }
+}
+
+function logUnexpectedError(logger, request, error, requestId) {
+  const diagnostic = {
+    event: "upload_service_unexpected_error",
+    requestId,
+    method: safeDiagnosticValue(request.method, "UNKNOWN"),
+    path: requestPath(request),
+    errorName: safeDiagnosticValue(error?.name, "Error"),
+    errorCode: safeDiagnosticValue(error?.code, "UNCLASSIFIED"),
+  };
+  try {
+    logger.error(JSON.stringify(diagnostic));
+  } catch {
+    // Logging must never prevent the sanitized response from being returned.
+  }
+}
+
+export function createUploadServer({ config, authorizationService, secureUploadService, logger = console }) {
   return createServer(async (request, response) => {
     try {
       const origin = applyCors(request, response, config);
@@ -89,6 +119,12 @@ export function createUploadServer({ config, authorizationService, secureUploadS
     } catch (error) {
       const status = error instanceof PublicError ? error.status : 500;
       const message = error instanceof PublicError ? error.message : "Unexpected upload service error.";
+      if (status === 500) {
+        const requestId = randomUUID();
+        logUnexpectedError(logger, request, error, requestId);
+        sendJson(response, status, { error: message, requestId });
+        return;
+      }
       sendJson(response, status, { error: message });
     }
   });

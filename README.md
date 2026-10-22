@@ -42,6 +42,22 @@ The upload service verifies a one-time wallet-signed challenge and the live cont
 - Node.js secure upload service, streaming multipart quarantine, ClamAV, and Pinata v3
 - CSS-based responsive cinematic interface
 
+## Validated project status
+
+The final engineering pass on **22 October 2026** produced these local results:
+
+| Check | Result |
+|---|---|
+| V1 Hardhat contract suite | 74 passing, 0 failing |
+| TypeScript (`npx tsc --noEmit`) | Passing |
+| Upload-service suite | 26 passing, 0 failing, 1 opt-in ClamAV integration test skipped |
+| Frontend unit suite | 20 passing, 0 failing |
+| Frontend ESLint | Passing |
+| Frontend production build | Passing |
+| Local RPC/deployment read | Chain ID 31337, contract code present, `jobCount()` and `REVIEW_PERIOD()` readable |
+
+The clean-file Pinata upload and real EICAR rejection were completed successfully during earlier live integration testing. Docker Desktop was not running during the final pass, so that pass did not repeat the opt-in real-engine test. These live checks are separate from the automated results above. See [FINAL_REVIEW_GUIDE.md](./FINAL_REVIEW_GUIDE.md) for the demonstration script and viva preparation.
+
 ## Roles
 
 - **Client:** creates and funds a job, approves submitted work, can raise a dispute, and can refund after a missed deadline when eligible.
@@ -297,7 +313,7 @@ npm run build
 
 Publish the generated `frontend/dist` directory with a reviewed GitHub Pages workflow or Pages deployment method. This repository does not auto-publish during the engineering pass. GitHub Pages serves only static files, so it cannot safely hold `PINATA_JWT` or run the secure upload service. The separately hosted HTTPS backend and frontend must use the same public chain and deployed contract.
 
-Pinata plans have finite storage, file-count, bandwidth, and request quotas. At the time of this pass, Pinata advertises a free tier with 1 GB total storage, 500 files, 10 GB monthly bandwidth, and 10,000 monthly requests; confirm current limits and pricing before a demo or deployment. Pinning is a provider service and does not guarantee permanent availability.
+Pinata plans have finite storage, file-count, bandwidth, and request quotas. Confirm the current plan limits before a demo or deployment. Pinning is a provider service and does not guarantee permanent availability.
 
 ## Testing
 
@@ -318,11 +334,15 @@ cd ..\upload-service
 npm test
 ```
 
+The real ClamAV integration test is intentionally opt-in and should be described as skipped unless it is run with `RUN_CLAMAV_INTEGRATION=true` against a healthy scanner. A successful mocked scanner test does not prove that the ClamAV daemon ran.
+
 Contract tests verify Solidity behavior. Manual MetaMask testing is still required for wallet prompts, account switching, network switching, transaction messaging, responsive layout, and each end-to-end user flow.
 
 ## Current limitations
 
 - A single designated arbitrator decides disputed jobs.
+- Once a V1 job enters `DISPUTED`, there is no arbitrator timeout or fallback recovery path. An inactive arbitrator can leave that escrow locked.
+- V1 allows either participant to raise a dispute whenever the state is still `SUBMITTED`, including after the three-day review period. After the timeout, dispute creation and the freelancer claim can therefore race until one transaction changes the state.
 - Work proof remains a string reference; the contract does not verify the referenced file, authorship, originality, IPFS availability, or content quality.
 - The frontend depends on MetaMask or a compatible injected provider.
 - There is no indexing service, search, pagination, notification system, or backend history view.

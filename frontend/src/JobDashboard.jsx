@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
 import {
   ESCROW_ABI,
@@ -38,11 +38,33 @@ function JobDashboard({ account }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [verification, setVerification] = useState(null);
+  const revision = useRef(0);
+
+  useEffect(() => {
+    const wallet = window.ethereum;
+    const requests = revision;
+    function clearForNetworkChange() {
+      requests.current++;
+      setJob(null);
+      setChainTime(null);
+      setReviewPeriod(REVIEW_PERIOD_FALLBACK);
+      setVerification(null);
+      setError("Network changed. Load the job again after selecting the configured network.");
+      setLoading(false);
+    }
+    wallet?.on("chainChanged", clearForNetworkChange);
+    return () => {
+      requests.current++;
+      wallet?.removeListener("chainChanged", clearForNetworkChange);
+    };
+  }, []);
 
   async function loadJob(event) {
     event.preventDefault();
     if (loading) return;
 
+    const current = ++revision.current;
+    const requestedValue = jobId.trim();
     setLoading(true);
     setError("");
     setJob(null);
@@ -50,7 +72,7 @@ function JobDashboard({ account }) {
 
     try {
       if (!window.ethereum) throw new Error("MetaMask is required to load a job.");
-      if (!jobId.trim() || !/^\d+$/.test(jobId.trim()) || BigInt(jobId.trim()) === 0n) {
+      if (!requestedValue || !/^\d+$/.test(requestedValue) || BigInt(requestedValue) === 0n) {
         throw new Error("Enter a valid Job ID greater than zero.");
       }
 
@@ -62,7 +84,8 @@ function JobDashboard({ account }) {
       }
 
       const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, provider);
-      const requestedId = BigInt(jobId.trim());
+      const requestedId = BigInt(requestedValue);
+      if (requestedId > ethers.MaxUint256) throw new Error("Job ID exceeds the uint256 range.");
       const totalJobs = await contract.jobCount();
       if (requestedId > totalJobs) throw new Error(`Job ${requestedId} does not exist.`);
 
@@ -74,6 +97,7 @@ function JobDashboard({ account }) {
       if (!latestBlock || Number(loadedJob.state) === 0) {
         throw new Error(`Job ${requestedId} does not exist.`);
       }
+      if (current !== revision.current) return;
 
       setJob({
         id: requestedId.toString(),
@@ -91,9 +115,11 @@ function JobDashboard({ account }) {
       setChainTime(BigInt(latestBlock.timestamp));
       setReviewPeriod(BigInt(configuredReviewPeriod));
     } catch (err) {
-      setError(err.shortMessage || err.reason || err.message || "Unable to load this job.");
+      if (current === revision.current) {
+        setError(err.shortMessage || err.reason || err.message || "Unable to load this job.");
+      }
     } finally {
-      setLoading(false);
+      if (current === revision.current) setLoading(false);
     }
   }
 
@@ -166,7 +192,15 @@ function JobDashboard({ account }) {
             type="text"
             inputMode="numeric"
             value={jobId}
-            onChange={(event) => setJobId(event.target.value)}
+            onChange={(event) => {
+              revision.current++;
+              setJobId(event.target.value);
+              setJob(null);
+              setChainTime(null);
+              setVerification(null);
+              setError("");
+              setLoading(false);
+            }}
             placeholder="e.g. 1"
           />
         </div>

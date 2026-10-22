@@ -168,3 +168,19 @@ test("upload cancellation, scanner rejection, and network failure are surfaced c
     /Scanner unavailable.*blocked/i,
   );
 });
+
+test("secure backend errors include only a validated diagnostic reference", async () => {
+  const requestId = "11111111-2222-4333-8444-555555555555";
+  await assert.rejects(
+    () => uploadFileSecurely({
+      uploadToken: "t".repeat(43),
+      file: new Blob(["deliverable"]),
+      xhrFactory: () => new MockXhr({
+        status: 500,
+        response: JSON.stringify({ error: "Unexpected upload service error.", requestId }),
+      }),
+    }),
+    (error) => error.message.includes("Unexpected upload service error.")
+      && error.message.includes(requestId),
+  );
+});

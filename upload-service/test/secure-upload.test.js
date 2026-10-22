@@ -78,6 +78,23 @@ test("clean file is scanned before Pinata publication and quarantine is cleaned"
   assert.deepEqual(await readdir(config.quarantineDir), []);
 });
 
+test("clean UTF-8 text passes quarantine validation, scanning, and publication", async (t) => {
+  const config = await temporaryConfig();
+  t.after(() => rm(config.quarantineDir, { recursive: true, force: true }));
+  const text = Buffer.from("Ordinary freelance deliverable notes.\n", "utf8");
+  const identity = identityFor(text, { name: "deliverable.txt", type: "text/plain" });
+  const order = [];
+  const service = createSecureUploadService({
+    config,
+    scan: async () => { order.push("scan"); return { status: "clean" }; },
+    publish: async () => { order.push("publish"); return { cid: CID }; },
+  });
+  const result = await service.process({ request: multipartRequest(text, identity), identity });
+  assert.deepEqual(order, ["scan", "publish"]);
+  assert.equal(result.sha256, identity.file.sha256);
+  assert.deepEqual(await readdir(config.quarantineDir), []);
+});
+
 test("malware detection blocks Pinata and cleans quarantine", async (t) => {
   const config = await temporaryConfig();
   t.after(() => rm(config.quarantineDir, { recursive: true, force: true }));
@@ -160,6 +177,7 @@ test("spoofed executable bytes declared as PDF are rejected before scanning or p
   );
   assert.equal(scanned, false);
   assert.equal(published, false);
+  assert.deepEqual(await readdir(config.quarantineDir), []);
 });
 
 test("content validator rejects active PDF actions", async (t) => {
@@ -172,6 +190,26 @@ test("content validator rejects active PDF actions", async (t) => {
     () => validateFileContent({ filePath, identity: identityFor(bytes) }),
     (error) => error.status === 415 && /Active or executable/i.test(error.message),
   );
+});
+
+test("content validator does not treat ordinary visible PDF text as a PDF action", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "escrow-pdf-text-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bytes = Buffer.from([
+    "%PDF-1.4",
+    "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj",
+    "2 0 obj<</Type/Pages/Count 0/Kids[]>>endobj",
+    "3 0 obj<</Length 38>>stream",
+    "This report discusses javascript: links.",
+    "endstream",
+    "endobj",
+    "trailer<</Root 1 0 R>>",
+    "%%EOF",
+  ].join("\n"), "latin1");
+  const filePath = path.join(directory, "visible-text.pdf");
+  await writeFile(filePath, bytes);
+  const result = await validateFileContent({ filePath, identity: identityFor(bytes) });
+  assert.equal(result.detectedMime, "application/pdf");
 });
 
 test("server-side Pinata upload preserves checksum metadata and validates CID", async () => {
@@ -192,6 +230,93 @@ test("server-side Pinata upload preserves checksum metadata and validates CID", 
   assert.equal(request.options.body.get("cid_version"), "v1");
   assert.equal(JSON.parse(request.options.body.get("keyvalues")).sha256, identity.file.sha256);
   assert.deepEqual(result, { cid: CID, providerFileId: "provider-id" });
+});
+
+test("server-side Pinata upload sends an actual quarantined file as multipart", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "escrow-pinata-form-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "deliverable.pdf");
+  await writeFile(filePath, PDF);
+  const identity = identityFor(PDF);
+  let inspected = false;
+  const result = await uploadFileToPinata({
+    config: { pinataJwt: "test-only-placeholder", pinataRequestTimeoutMs: 1_000 },
+    identity,
+    filePath,
+    fetchImpl: async (url, options) => {
+      const file = options.body.get("file");
+      assert.equal(url, "https://uploads.pinata.cloud/v3/files");
+      assert.equal(options.body.get("network"), "public");
+      assert.equal(file.name, identity.file.name);
+      assert.equal(file.type, identity.file.type);
+      assert.deepEqual(Buffer.from(await file.arrayBuffer()), PDF);
+      inspected = true;
+      return new Response(JSON.stringify({ data: { cid: CID } }), { status: 200 });
+    },
+  });
+  assert.equal(inspected, true);
+  assert.equal(result.cid, CID);
+});
+
+test("Pinata provider rejection is converted to a safe error without exposing its response", async () => {
+  const providerDetail = "provider-private-diagnostic";
+  await assert.rejects(
+    () => uploadFileToPinata({
+      config: { pinataJwt: "test-only-placeholder", pinataRequestTimeoutMs: 1_000 },
+      identity: identityFor(PDF),
+      filePath: "unused-in-mock",
+      openBlob: async () => new Blob([PDF], { type: "application/pdf" }),
+      fetchImpl: async () => new Response(JSON.stringify({ error: providerDetail }), { status: 401 }),
+    }),
+    (error) => error.status === 502
+      && /did not accept/i.test(error.message)
+      && !error.message.includes(providerDetail),
+  );
+});
+
+test("unreadable Pinata responses are converted to a safe provider error", async () => {
+  await assert.rejects(
+    () => uploadFileToPinata({
+      config: { pinataJwt: "test-only-placeholder", pinataRequestTimeoutMs: 1_000 },
+      identity: identityFor(PDF),
+      filePath: "unused-in-mock",
+      openBlob: async () => new Blob([PDF], { type: "application/pdf" }),
+      fetchImpl: async () => new Response("not-json", { status: 502 }),
+    }),
+    (error) => error.status === 502 && /unreadable/i.test(error.message),
+  );
+});
+
+test("Pinata network failures are converted to a safe unavailable error", async () => {
+  const sensitiveDetail = "private-network-diagnostic";
+  await assert.rejects(
+    () => uploadFileToPinata({
+      config: { pinataJwt: "test-only-placeholder", pinataRequestTimeoutMs: 1_000 },
+      identity: identityFor(PDF),
+      filePath: "unused-in-mock",
+      openBlob: async () => new Blob([PDF], { type: "application/pdf" }),
+      fetchImpl: async () => { throw new Error(sensitiveDetail); },
+    }),
+    (error) => error.status === 502
+      && /unavailable or timed out/i.test(error.message)
+      && !error.message.includes(sensitiveDetail),
+  );
+});
+
+test("provider failure after a clean scan still removes the quarantined file", async (t) => {
+  const config = await temporaryConfig();
+  t.after(() => rm(config.quarantineDir, { recursive: true, force: true }));
+  const identity = identityFor(PDF);
+  const service = createSecureUploadService({
+    config,
+    scan: async () => ({ status: "clean" }),
+    publish: async () => { throw new PublicError(502, "The IPFS provider is unavailable or timed out."); },
+  });
+  await assert.rejects(
+    () => service.process({ request: multipartRequest(PDF, identity), identity }),
+    (error) => error.status === 502 && /provider is unavailable/i.test(error.message),
+  );
+  assert.deepEqual(await readdir(config.quarantineDir), []);
 });
 
 test("ClamAV protocol timeout closes the scan and returns a safe blocked error", async (t) => {

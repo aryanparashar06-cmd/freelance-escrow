@@ -32,7 +32,7 @@ function errorMessage(err) {
   if (reason?.includes("Job does not exist")) return "Job does not exist. Check the Job ID.";
   if (reason?.includes("Deadline has passed")) return "The job deadline has passed. Work can no longer be submitted.";
   if (/file signature|active or executable|valid UTF-8|valid JSON|unsupported binary/i.test(reason || "")) {
-    return `Upload rejected: malicious or unsupported file. ${reason}`;
+    return `Upload rejected: unsafe or unsupported file. ${reason}`;
   }
   return reason || "Unable to complete the request. Check MetaMask and the local node.";
 }

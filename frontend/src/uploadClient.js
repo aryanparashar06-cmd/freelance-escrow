@@ -31,6 +31,14 @@ export const SECURE_UPLOAD_STAGES = [
   { id: "complete", label: "Upload successful, CID generated" },
 ];
 
+function serviceError(payload, fallback) {
+  const message = typeof payload?.error === "string" && payload.error.trim() ? payload.error : fallback;
+  const requestId = typeof payload?.requestId === "string" && /^[0-9a-f-]{36}$/i.test(payload.requestId)
+    ? payload.requestId
+    : "";
+  return requestId ? `${message} Reference: ${requestId}.` : message;
+}
+
 export function validateDeliverableFile(file) {
   if (!file) throw new Error("Choose a deliverable file first.");
   if (!Number.isSafeInteger(file.size) || file.size <= 0) throw new Error("The selected file is empty or unreadable.");
@@ -49,7 +57,7 @@ async function readResponse(response) {
   } catch {
     throw new Error("The upload service returned an unreadable response.");
   }
-  if (!response.ok) throw new Error(payload?.error || `Upload service request failed (${response.status}).`);
+  if (!response.ok) throw new Error(serviceError(payload, `Upload service request failed (${response.status}).`));
   return payload;
 }
 
@@ -123,7 +131,7 @@ export function uploadFileSecurely({ uploadToken, file, signal, onProgress, onSt
         return;
       }
       if (request.status < 200 || request.status >= 300) {
-        reject(new Error(payload?.error || `Secure upload failed (${request.status}).`));
+        reject(new Error(serviceError(payload, `Secure upload failed (${request.status}).`)));
         return;
       }
       const cid = payload?.cid;

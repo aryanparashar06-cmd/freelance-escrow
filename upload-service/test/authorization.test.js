@@ -154,3 +154,41 @@ test("legacy signing endpoint is absent and secure upload requires a backend tok
   const missingToken = await fetch(`http://127.0.0.1:${port}/v1/upload`, { method: "POST" });
   assert.equal(missingToken.status, 401);
 });
+
+test("unexpected server errors return a correlation ID and log only safe diagnostics", async (t) => {
+  const sensitiveDetail = "private-provider-body-and-token";
+  const logLines = [];
+  const server = createUploadServer({
+    config,
+    authorizationService: { consumeUploadToken: () => ({}) },
+    secureUploadService: {
+      process: async () => {
+        const error = new TypeError(sensitiveDetail);
+        error.code = "ERR_INVALID_ARG_TYPE";
+        throw error;
+      },
+    },
+    logger: { error: (line) => logLines.push(line) },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/v1/upload?private=${sensitiveDetail}`, {
+    method: "POST",
+    headers: { "X-Upload-Token": "x".repeat(32) },
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 500);
+  assert.equal(payload.error, "Unexpected upload service error.");
+  assert.match(payload.requestId, /^[0-9a-f-]{36}$/i);
+  assert.equal(logLines.length, 1);
+  assert.equal(logLines[0].includes(sensitiveDetail), false);
+  assert.deepEqual(JSON.parse(logLines[0]), {
+    event: "upload_service_unexpected_error",
+    requestId: payload.requestId,
+    method: "POST",
+    path: "/v1/upload",
+    errorName: "TypeError",
+    errorCode: "ERR_INVALID_ARG_TYPE",
+  });
+});
